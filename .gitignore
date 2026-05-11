@@ -34,9 +34,14 @@ uv.lock
 .cargo-local/
 .npm-local/
 .cache-local/
+.ai-jail
 
 # Certificates and signing keys
 sherlock/certs/
 
 # Blog posts (drafts, not shipped)
 posts/
+
+# Local experiment artifacts
+_face_ab_test/*.pt
+*.url

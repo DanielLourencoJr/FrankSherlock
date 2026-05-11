@@ -1,4 +1,7 @@
-use crate::platform::gpu::{GpuInfo, GpuVendor};
+use crate::platform::{
+    gpu::{GpuInfo, GpuVendor},
+    OsKind,
+};
 
 pub const MODEL_SMALL: &str = "qwen2.5vl:3b";
 pub const MODEL_MEDIUM: &str = "qwen2.5vl:7b";
@@ -8,6 +11,8 @@ pub const MODEL_LARGE: &str = "qwen2.5vl:32b";
 const LARGE_THRESHOLD_MIB: u64 = 48 * 1024; // 48 GiB
 /// Minimum effective memory (MiB) for the medium model tier.
 const MEDIUM_THRESHOLD_MIB: u64 = 8 * 1024; // 8 GiB
+/// Upper Windows NVIDIA VRAM bound where qwen2.5vl:7b has shown Ollama offload stalls.
+const WINDOWS_NVIDIA_SMALL_FALLBACK_MAX_MIB: u64 = 8 * 1024; // 8 GiB
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -52,7 +57,21 @@ fn effective_memory_mib(gpu: &GpuInfo) -> u64 {
     }
 }
 
-fn select_tier(gpu: &GpuInfo) -> ModelTier {
+fn should_prefer_small_on_windows_nvidia(gpu: &GpuInfo, os: OsKind) -> bool {
+    if os != OsKind::Windows || gpu.vendor != GpuVendor::Nvidia || gpu.unified_memory {
+        return false;
+    }
+    match gpu.vram_total_mib {
+        Some(vram) => vram <= WINDOWS_NVIDIA_SMALL_FALLBACK_MAX_MIB,
+        None => false,
+    }
+}
+
+fn select_tier_for_os(gpu: &GpuInfo, os: OsKind) -> ModelTier {
+    if should_prefer_small_on_windows_nvidia(gpu, os) {
+        return ModelTier::Small;
+    }
+
     let mem = effective_memory_mib(gpu);
     // Large tier only for unified memory systems (Apple Silicon, AMD APU)
     // since discrete GPUs pay a heavy speed penalty for 32b
@@ -68,39 +87,51 @@ fn select_tier(gpu: &GpuInfo) -> ModelTier {
 /// Select the recommended model based on detected hardware.
 ///
 /// Returns (model_tag, tier, human-readable reason).
-pub fn recommended_model(gpu: &GpuInfo) -> (&'static str, ModelTier, String) {
-    let tier = select_tier(gpu);
-    let reason = match (tier, gpu.vendor) {
-        (ModelTier::Large, GpuVendor::Apple) => format!(
-            "Apple unified memory ({} GiB) supports 32b model",
-            gpu.system_ram_mib / 1024
-        ),
-        (ModelTier::Large, _) => format!(
-            "Unified memory ({} GiB) supports 32b model",
-            gpu.system_ram_mib / 1024
-        ),
-        (ModelTier::Medium, GpuVendor::Nvidia) => {
-            let vram = gpu.vram_total_mib.unwrap_or(0);
-            format!("NVIDIA GPU ({} GiB VRAM) — 7b is optimal", vram / 1024)
+fn recommended_model_for_os(gpu: &GpuInfo, os: OsKind) -> (&'static str, ModelTier, String) {
+    let tier = select_tier_for_os(gpu, os);
+    let reason = if should_prefer_small_on_windows_nvidia(gpu, os) {
+        let vram = gpu.vram_total_mib.unwrap_or(0);
+        format!(
+            "Windows NVIDIA GPU ({} GiB VRAM) - using 3b to avoid qwen2.5vl:7b GPU offload stalls",
+            vram / 1024
+        )
+    } else {
+        match (tier, gpu.vendor) {
+            (ModelTier::Large, GpuVendor::Apple) => format!(
+                "Apple unified memory ({} GiB) supports 32b model",
+                gpu.system_ram_mib / 1024
+            ),
+            (ModelTier::Large, _) => format!(
+                "Unified memory ({} GiB) supports 32b model",
+                gpu.system_ram_mib / 1024
+            ),
+            (ModelTier::Medium, GpuVendor::Nvidia) => {
+                let vram = gpu.vram_total_mib.unwrap_or(0);
+                format!("NVIDIA GPU ({} GiB VRAM) — 7b is optimal", vram / 1024)
+            }
+            (ModelTier::Medium, GpuVendor::Amd) => {
+                let vram = gpu.vram_total_mib.unwrap_or(0);
+                format!("AMD GPU ({} GiB VRAM) — 7b is optimal", vram / 1024)
+            }
+            (ModelTier::Medium, GpuVendor::Apple) => format!(
+                "Apple unified memory ({} GiB) — 7b is optimal",
+                gpu.system_ram_mib / 1024
+            ),
+            (ModelTier::Medium, GpuVendor::Unknown) => format!(
+                "System RAM ({} GiB) — 7b is optimal",
+                gpu.system_ram_mib / 1024
+            ),
+            (ModelTier::Small, _) => format!(
+                "Limited memory ({} GiB) — using lightweight 3b model",
+                gpu.system_ram_mib / 1024
+            ),
         }
-        (ModelTier::Medium, GpuVendor::Amd) => {
-            let vram = gpu.vram_total_mib.unwrap_or(0);
-            format!("AMD GPU ({} GiB VRAM) — 7b is optimal", vram / 1024)
-        }
-        (ModelTier::Medium, GpuVendor::Apple) => format!(
-            "Apple unified memory ({} GiB) — 7b is optimal",
-            gpu.system_ram_mib / 1024
-        ),
-        (ModelTier::Medium, GpuVendor::Unknown) => format!(
-            "System RAM ({} GiB) — 7b is optimal",
-            gpu.system_ram_mib / 1024
-        ),
-        (ModelTier::Small, _) => format!(
-            "Limited memory ({} GiB) — using lightweight 3b model",
-            gpu.system_ram_mib / 1024
-        ),
     };
     (tier.model_tag(), tier, reason)
+}
+
+pub fn recommended_model(gpu: &GpuInfo) -> (&'static str, ModelTier, String) {
+    recommended_model_for_os(gpu, crate::platform::current_os())
 }
 
 #[cfg(test)]
@@ -188,6 +219,23 @@ mod tests {
         // Discrete GPUs should NOT get large tier (29x slower per A/B testing)
         let gpu = make_gpu(GpuVendor::Nvidia, Some(48 * 1024), false, 64 * 1024);
         let (tag, tier, _) = recommended_model(&gpu);
+        assert_eq!(tag, MODEL_MEDIUM);
+        assert_eq!(tier, ModelTier::Medium);
+    }
+
+    #[test]
+    fn windows_nvidia_8gb_selects_small_to_avoid_offload_stalls() {
+        let gpu = make_gpu(GpuVendor::Nvidia, Some(8 * 1024), false, 32 * 1024);
+        let (tag, tier, reason) = recommended_model_for_os(&gpu, OsKind::Windows);
+        assert_eq!(tag, MODEL_SMALL);
+        assert_eq!(tier, ModelTier::Small);
+        assert!(reason.contains("qwen2.5vl:7b"));
+    }
+
+    #[test]
+    fn linux_nvidia_8gb_still_selects_medium() {
+        let gpu = make_gpu(GpuVendor::Nvidia, Some(8 * 1024), false, 32 * 1024);
+        let (tag, tier, _) = recommended_model_for_os(&gpu, OsKind::Linux);
         assert_eq!(tag, MODEL_MEDIUM);
         assert_eq!(tier, ModelTier::Medium);
     }
