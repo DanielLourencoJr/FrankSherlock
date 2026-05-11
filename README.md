@@ -9,7 +9,7 @@ Local-only, AI-powered image cataloging and search for your NAS. Point it at a d
 ## What it does
 
 - Scans image, PDF, and video directories read-only (JPEG, PNG, GIF, BMP, WebP, TIFF, PDF, MP4, MKV, AVI, MOV, WebM, and more)
-- Classifies each image with Ollama's `qwen2.5vl:7b` vision model (media type, description, anime/manga identification, document detection)
+- Classifies each image with a local Ollama vision model selected for your hardware (media type, description, anime/manga identification, document detection)
 - Extracts text via Surya OCR (with vision LLM fallback) for documents, receipts, screenshots
 - Generates 300px JPEG thumbnails for fast browsing (PDF 2-page montage)
 - Full-text search with SQLite FTS5
@@ -44,6 +44,30 @@ The MSI installer is not signed with a code-signing certificate. Windows SmartSc
 - NVIDIA GPU recommended on Linux/Windows (RTX series works well with qwen2.5vl:7b); Apple Silicon works natively on macOS
 - Node.js 20+
 - Rust 1.77+
+
+## Ollama model override
+
+Frank Sherlock creates this commented runtime settings file on first startup:
+
+- Linux: `~/.config/frank_sherlock/settings.toml`
+- macOS: `~/Library/Application Support/frank_sherlock/settings.toml`
+- Windows: `%APPDATA%\frank_sherlock\settings.toml`
+
+By default the app chooses a vision model from detected hardware. To force a smaller or alternate model, edit the file and restart the app:
+
+```toml
+model_override = "qwen2.5vl:3b"
+```
+
+When `model_override` is set, setup requires that exact Ollama model. If it is missing, the first-run setup dialog offers to download it with Ollama before scans can start. The first classification request loads the model on demand, and the app unloads Ollama models after scans finish.
+
+Recommended override values:
+
+- `qwen2.5vl:3b`: faster and safer for low VRAM, Windows NVIDIA <= 8GB, or CPU fallback.
+- `qwen2.5vl:7b`: better quality when Ollama can load it fully on GPU.
+- `qwen2.5vl:32b`: heavy; only realistic for large unified-memory systems.
+
+Experimental alternatives such as `minicpm-v:8b` or `moondream` may work if installed in Ollama, but the prompts are tuned for `qwen2.5vl`.
 
 ## Building from source
 

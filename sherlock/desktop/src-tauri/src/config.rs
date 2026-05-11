@@ -94,7 +94,7 @@ fn default_base_dir() -> AppResult<PathBuf> {
 }
 
 // ---------------------------------------------------------------------------
-// User config (~/.config/frank_sherlock/config.json)
+// UI config (~/.config/frank_sherlock/config.json)
 // ---------------------------------------------------------------------------
 
 fn user_config_path() -> AppResult<PathBuf> {
@@ -124,6 +124,115 @@ pub fn save_user_config(config: &serde_json::Value) -> AppResult<()> {
         .map_err(|e| AppError::Config(format!("failed to serialize config: {e}")))?;
     std::fs::write(&path, data)?;
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Runtime settings (~/.config/frank_sherlock/settings.toml)
+// ---------------------------------------------------------------------------
+
+const SETTINGS_TEMPLATE: &str = r#"# Frank Sherlock runtime settings.
+#
+# Restart Frank Sherlock after changing this file.
+#
+# Ollama vision model override.
+# Leave empty to let the app choose from detected hardware.
+#
+# Recommended options:
+# - qwen2.5vl:3b   Faster and safer for low VRAM, Windows NVIDIA <= 8GB, or CPU fallback.
+# - qwen2.5vl:7b   Better quality when Ollama can load it fully on GPU.
+# - qwen2.5vl:32b  Heavy; only realistic for large unified-memory systems.
+#
+# Experimental alternatives may work if installed in Ollama, but prompts are tuned for qwen2.5vl:
+# - minicpm-v:8b
+# - moondream
+#
+# When set, Frank Sherlock requires this exact model. If it is missing, first-run setup will
+# offer to download it through Ollama before scanning.
+model_override = ""
+"#;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeSettings {
+    pub model_override: Option<String>,
+}
+
+fn runtime_settings_path() -> AppResult<PathBuf> {
+    if let Some(config_dir) = dirs::config_dir() {
+        return Ok(config_dir.join("frank_sherlock").join("settings.toml"));
+    }
+    Err(AppError::Config(
+        "could not resolve user config directory".to_string(),
+    ))
+}
+
+pub fn ensure_runtime_settings_file() -> AppResult<PathBuf> {
+    let path = runtime_settings_path()?;
+    if path.exists() {
+        return Ok(path);
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&path, SETTINGS_TEMPLATE)?;
+    Ok(path)
+}
+
+pub fn load_runtime_settings() -> AppResult<RuntimeSettings> {
+    let path = ensure_runtime_settings_file()?;
+    let data = std::fs::read_to_string(&path)?;
+    parse_runtime_settings(&data)
+}
+
+fn parse_runtime_settings(data: &str) -> AppResult<RuntimeSettings> {
+    let mut model_override = None;
+
+    for raw_line in data.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        if key.trim() != "model_override" {
+            continue;
+        }
+
+        let parsed = parse_settings_string(value.trim())?;
+        let parsed = parsed.trim();
+        if !parsed.is_empty() {
+            validate_model_tag(parsed)?;
+            model_override = Some(parsed.to_string());
+        }
+    }
+
+    Ok(RuntimeSettings { model_override })
+}
+
+fn parse_settings_string(value: &str) -> AppResult<String> {
+    let without_comment = value.split('#').next().unwrap_or("").trim();
+    if without_comment.starts_with('"') {
+        let parsed: String = serde_json::from_str(without_comment)
+            .map_err(|e| AppError::Config(format!("invalid quoted model_override value: {e}")))?;
+        return Ok(parsed);
+    }
+    Ok(without_comment.to_string())
+}
+
+fn validate_model_tag(model: &str) -> AppResult<()> {
+    let valid = !model.is_empty()
+        && model.len() <= 128
+        && model
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | ':' | '/'));
+    if valid {
+        Ok(())
+    } else {
+        Err(AppError::Config(format!(
+            "invalid model_override '{model}': use an Ollama model tag like qwen2.5vl:3b"
+        )))
+    }
 }
 
 /// Expand `~`, canonicalize, and validate that the result is a directory.
@@ -270,5 +379,48 @@ mod tests {
         assert!(paths.thumbnails_dir.exists());
         assert!(paths.classification_cache_dir.exists());
         env::remove_var(DATA_DIR_ENV);
+    }
+
+    #[test]
+    fn parse_runtime_settings_empty_override_uses_automatic() {
+        let settings = parse_runtime_settings(r#"model_override = """#).expect("settings");
+        assert_eq!(
+            settings,
+            RuntimeSettings {
+                model_override: None
+            }
+        );
+    }
+
+    #[test]
+    fn parse_runtime_settings_quoted_override() {
+        let settings =
+            parse_runtime_settings(r#"model_override = "qwen2.5vl:3b""#).expect("settings");
+        assert_eq!(settings.model_override.as_deref(), Some("qwen2.5vl:3b"));
+    }
+
+    #[test]
+    fn parse_runtime_settings_unquoted_override_with_comment() {
+        let settings = parse_runtime_settings(
+            r#"
+            # local fallback
+            model_override = qwen2.5vl:3b # exact Ollama tag
+            "#,
+        )
+        .expect("settings");
+        assert_eq!(settings.model_override.as_deref(), Some("qwen2.5vl:3b"));
+    }
+
+    #[test]
+    fn parse_runtime_settings_rejects_invalid_model_tag() {
+        let err = parse_runtime_settings(r#"model_override = "bad model""#);
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn runtime_settings_template_documents_model_override() {
+        assert!(SETTINGS_TEMPLATE.contains("model_override"));
+        assert!(SETTINGS_TEMPLATE.contains("qwen2.5vl:3b"));
+        assert!(SETTINGS_TEMPLATE.contains("qwen2.5vl:7b"));
     }
 }

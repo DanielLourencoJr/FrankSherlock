@@ -32,6 +32,16 @@ use models::{
 use tauri::Manager;
 use tauri::State;
 
+#[derive(Debug, Clone)]
+struct ModelSelection {
+    required_model: String,
+    scan_model: String,
+    tier: String,
+    reason: String,
+    exact_required: bool,
+    settings_error: Option<String>,
+}
+
 #[derive(Clone)]
 struct AppState {
     paths: AppPaths,
@@ -59,6 +69,44 @@ impl AppState {
         self.cached_system_python
             .get_or_init(platform::python::find_system_python)
             .as_deref()
+    }
+}
+
+fn select_model_for_app(gpu: &platform::gpu::GpuInfo) -> ModelSelection {
+    match config::load_runtime_settings() {
+        Ok(settings) => {
+            if let Some(model) = settings.model_override {
+                return ModelSelection {
+                    required_model: model.clone(),
+                    scan_model: model.clone(),
+                    tier: "manual".to_string(),
+                    reason: format!("Manual model override from settings.toml: {model}"),
+                    exact_required: true,
+                    settings_error: None,
+                };
+            }
+        }
+        Err(e) => {
+            let (recommended_tag, model_tier, model_reason) = llm::recommended_model(gpu);
+            return ModelSelection {
+                required_model: recommended_tag.to_string(),
+                scan_model: llm::resolve_installed_model(recommended_tag),
+                tier: model_tier.as_str().to_string(),
+                reason: model_reason,
+                exact_required: false,
+                settings_error: Some(e.to_string()),
+            };
+        }
+    }
+
+    let (recommended_tag, model_tier, model_reason) = llm::recommended_model(gpu);
+    ModelSelection {
+        required_model: recommended_tag.to_string(),
+        scan_model: llm::resolve_installed_model(recommended_tag),
+        tier: model_tier.as_str().to_string(),
+        reason: model_reason,
+        exact_required: false,
+        settings_error: None,
     }
 }
 
@@ -1352,15 +1400,21 @@ fn run_face_detection(
 
 fn compute_setup_status(app_state: &AppState) -> SetupStatus {
     let gpu = app_state.gpu_info();
-    let (model_tag, model_tier, model_reason) = llm::recommended_model(gpu);
-    let required_models = vec![model_tag.to_string()];
+    let model_selection = select_model_for_app(gpu);
+    let required_models = vec![model_selection.required_model.clone()];
 
     let installed = llm::list_installed_models();
     let ollama_available = installed.is_some();
     let missing_models = if let Some(models) = installed {
         required_models
             .iter()
-            .filter(|required| !models.iter().any(|m| llm::model_satisfies(m, required)))
+            .filter(|required| {
+                if model_selection.exact_required {
+                    !models.iter().any(|m| m == *required)
+                } else {
+                    !models.iter().any(|m| llm::model_satisfies(m, required))
+                }
+            })
             .cloned()
             .collect::<Vec<_>>()
     } else {
@@ -1401,6 +1455,12 @@ fn compute_setup_status(app_state: &AppState) -> SetupStatus {
     } else {
         vec!["Setup complete.".to_string()]
     };
+
+    if let Some(err) = &model_selection.settings_error {
+        instructions.push(format!(
+            "Settings warning: could not read settings.toml ({err}); using automatic model selection."
+        ));
+    }
 
     // Surya/Python is a soft requirement (OCR enrichment)
     let system_python_found = app_state.system_python().is_some();
@@ -1466,9 +1526,9 @@ fn compute_setup_status(app_state: &AppState) -> SetupStatus {
         python_available: python_status.available,
         python_version: python_status.version,
         surya_venv_ok,
-        recommended_model: model_tag.to_string(),
-        model_tier: model_tier.as_str().to_string(),
-        model_selection_reason: model_reason,
+        recommended_model: model_selection.required_model,
+        model_tier: model_selection.tier,
+        model_selection_reason: model_selection.reason,
         system_python_found,
         venv_provision,
         ffmpeg_available,
@@ -1520,15 +1580,14 @@ fn resolve_pdfium_lib(app_handle: &tauri::AppHandle) -> std::path::PathBuf {
 fn build_scan_context(app_state: &AppState, app_handle: &tauri::AppHandle) -> models::ScanContext {
     let surya_script = resolve_surya_script(app_handle);
     let pdfium_lib_path = resolve_pdfium_lib(app_handle);
-    let (recommended_tag, _, _) = llm::recommended_model(app_state.gpu_info());
-    let actual_model = llm::resolve_installed_model(recommended_tag);
+    let model_selection = select_model_for_app(app_state.gpu_info());
     models::ScanContext {
         db_path: app_state.paths.db_file.clone(),
         thumbnails_dir: app_state.paths.thumbnails_dir.clone(),
         tmp_dir: app_state.paths.tmp_dir.clone(),
         surya_venv_dir: app_state.paths.surya_venv_dir.clone(),
         surya_script,
-        model: actual_model,
+        model: model_selection.scan_model,
         pdfium_lib_path,
     }
 }
@@ -1661,6 +1720,10 @@ pub fn run() {
             eprintln!("Fatal: failed to initialize application paths/database: {e}");
             std::process::exit(1);
         });
+
+    if let Err(e) = config::ensure_runtime_settings_file() {
+        log::warn!("Failed to prepare runtime settings file: {e}");
+    }
 
     let cli_folder_path: Option<String> =
         std::env::args()

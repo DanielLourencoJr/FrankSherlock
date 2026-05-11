@@ -35,6 +35,13 @@ WEBKIT_DISABLE_DMABUF_RENDERER=1 GDK_BACKEND=wayland,x11 npm run tauri:dev
 - If not ready, UI is blocked by a setup dialog with instructions and download progress.
 - Model download is triggered from the app via `ollama pull`.
 
+## Ollama Model Override
+- First startup creates `~/.config/frank_sherlock/settings.toml` on Linux, with comments and model examples.
+- Leave `model_override = ""` for automatic hardware-based selection.
+- Set an exact Ollama tag such as `model_override = "qwen2.5vl:3b"` to force a model.
+- When overridden, setup requires that exact model and offers to download it if missing.
+- The first classification request loads the model on demand; scan cleanup unloads Ollama models afterward.
+
 ## Build AppImage
 From `sherlock/desktop`:
 
