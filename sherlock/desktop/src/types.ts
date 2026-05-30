@@ -87,6 +87,7 @@ export type RuntimeStatus = {
   unifiedMemory: boolean;
   systemRamMib: number;
   ollamaAvailable: boolean;
+  provider: "ollama" | "groq";
 };
 
 export type SetupDownloadStatus = {
@@ -105,6 +106,7 @@ export type VenvProvisionStatus = {
 
 export type SetupStatus = {
   isReady: boolean;
+  provider: "ollama" | "groq";
   ollamaAvailable: boolean;
   requiredModels: string[];
   missingModels: string[];
@@ -119,6 +121,7 @@ export type SetupStatus = {
   systemPythonFound: boolean;
   venvProvision: VenvProvisionStatus;
   ffmpegAvailable: boolean;
+  groqConfigured: boolean;
 };
 
 export type HealthStatus = {

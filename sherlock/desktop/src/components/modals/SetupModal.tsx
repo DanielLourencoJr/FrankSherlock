@@ -25,15 +25,20 @@ function ExternalLink({ url, children }: { url: string; children: React.ReactNod
 }
 
 export default function SetupModal({ setup, onRecheck, onDownload, onSetupOcr, onClose }: Props) {
-  const ocrStatusText = setup.suryaVenvOk
-    ? `Ready${setup.pythonVersion ? ` (Python ${setup.pythonVersion})` : ""}`
-    : setup.systemPythonFound
-      ? "Python found, needs setup"
-      : setup.pythonAvailable
-        ? "Python found, venv issue"
-        : null;
+  const isGroq = setup.provider === "groq";
+
+  const ocrStatusText = isGroq
+    ? "Groq handles OCR natively"
+    : setup.suryaVenvOk
+      ? `Ready${setup.pythonVersion ? ` (Python ${setup.pythonVersion})` : ""}`
+      : setup.systemPythonFound
+        ? "Python found, needs setup"
+        : setup.pythonAvailable
+          ? "Python found, venv issue"
+          : null;
 
   const canSetupOcr =
+    !isGroq &&
     setup.systemPythonFound &&
     !setup.suryaVenvOk &&
     setup.venvProvision.status !== "running";
@@ -42,23 +47,46 @@ export default function SetupModal({ setup, onRecheck, onDownload, onSetupOcr, o
     <ModalOverlay onEscape={onClose}>
       <div className="modal-base setup-modal" onClick={(e) => e.stopPropagation()}>
         <h2>First-Time Setup</h2>
-        <p>Sherlock needs local Ollama service and required model(s) before scanning.</p>
+        <p>
+          {isGroq
+            ? "Sherlock uses the Groq API for classification and OCR. Configure your API key below."
+            : "Sherlock needs local Ollama service and required model(s) before scanning."}
+        </p>
         <div className="setup-status-grid">
+          {isGroq ? (
+            <>
+              <div>
+                <strong>Provider</strong>
+                <p>Groq (Llama 4 Scout)</p>
+              </div>
+              <div>
+                <strong>API Key</strong>
+                <p>
+                  {setup.groqConfigured
+                    ? "Configured"
+                    : <>Not configured — <ExternalLink url="https://console.groq.com/keys">get a key</ExternalLink></>}
+                </p>
+              </div>
+            </>
+          ) : (
+            <>
+              <div>
+                <strong>Ollama</strong>
+                <p>{setup.ollamaAvailable ? "Running" : <>Not detected — <ExternalLink url="https://ollama.com/download">install</ExternalLink></>}</p>
+              </div>
+              <div>
+                <strong>Model ({setup.modelTier})</strong>
+                <p title={setup.modelSelectionReason}>{setup.recommendedModel}</p>
+              </div>
+              <div>
+                <strong>Missing</strong>
+                <p>{setup.missingModels.length ? setup.missingModels.join(", ") : "None"}</p>
+              </div>
+            </>
+          )}
           <div>
-            <strong>Ollama</strong>
-            <p>{setup.ollamaAvailable ? "Running" : <>Not detected — <ExternalLink url="https://ollama.com/download">install</ExternalLink></>}</p>
-          </div>
-          <div>
-            <strong>Model ({setup.modelTier})</strong>
-            <p title={setup.modelSelectionReason}>{setup.recommendedModel}</p>
-          </div>
-          <div>
-            <strong>Missing</strong>
-            <p>{setup.missingModels.length ? setup.missingModels.join(", ") : "None"}</p>
-          </div>
-          <div>
-            <strong>OCR (Surya)</strong>
-            <p>{ocrStatusText ?? <>Not available — <ExternalLink url="https://www.python.org/downloads/">install Python</ExternalLink></>}</p>
+            <strong>OCR</strong>
+            <p>{isGroq ? "Groq (built-in)" : ocrStatusText ?? <>Not available — <ExternalLink url="https://www.python.org/downloads/">install Python</ExternalLink></>}</p>
           </div>
           <div>
             <strong>Video (ffmpeg)</strong>
@@ -70,12 +98,16 @@ export default function SetupModal({ setup, onRecheck, onDownload, onSetupOcr, o
             <li key={instruction}>{instruction}</li>
           ))}
         </ul>
-        <div className="progress-wrap">
-          <progress value={setup.download.progressPct} max={100} />
-          <span>{setup.download.progressPct.toFixed(1)}%</span>
-        </div>
-        <p className="setup-download-text">{setup.download.message}</p>
-        {setup.venvProvision.status !== "idle" && (
+        {!isGroq && (
+          <>
+            <div className="progress-wrap">
+              <progress value={setup.download.progressPct} max={100} />
+              <span>{setup.download.progressPct.toFixed(1)}%</span>
+            </div>
+            <p className="setup-download-text">{setup.download.message}</p>
+          </>
+        )}
+        {setup.venvProvision.status !== "idle" && !isGroq && (
           <>
             <div className="progress-wrap">
               <progress value={setup.venvProvision.status === "completed" ? 100 : setup.venvProvision.progressPct} max={100} />
@@ -86,23 +118,25 @@ export default function SetupModal({ setup, onRecheck, onDownload, onSetupOcr, o
         )}
         <div className="modal-actions">
           <button type="button" onClick={onRecheck}>Recheck</button>
-          <button
-            type="button"
-            onClick={onDownload}
-            disabled={
-              !setup.ollamaAvailable ||
-              setup.missingModels.length === 0 ||
-              setup.download.status === "running"
-            }
-          >
-            {setup.download.status === "running" ? "Downloading..." : "Download model"}
-          </button>
+          {!isGroq && (
+            <button
+              type="button"
+              onClick={onDownload}
+              disabled={
+                !setup.ollamaAvailable ||
+                setup.missingModels.length === 0 ||
+                setup.download.status === "running"
+              }
+            >
+              {setup.download.status === "running" ? "Downloading..." : "Download model"}
+            </button>
+          )}
           {canSetupOcr && (
             <button type="button" onClick={onSetupOcr}>
               Setup OCR
             </button>
           )}
-          {setup.venvProvision.status === "running" && (
+          {setup.venvProvision.status === "running" && !isGroq && (
             <button type="button" disabled>
               Setting up OCR...
             </button>

@@ -6,6 +6,7 @@ import type { SetupStatus } from "../../types";
 
 const mockSetup: SetupStatus = {
   isReady: false,
+  provider: "ollama",
   ollamaAvailable: true,
   requiredModels: ["qwen2.5vl:7b"],
   missingModels: ["qwen2.5vl:7b"],
@@ -20,6 +21,7 @@ const mockSetup: SetupStatus = {
   systemPythonFound: false,
   venvProvision: { status: "idle", step: "", progressPct: 0, message: "No OCR setup in progress" },
   ffmpegAvailable: true,
+  groqConfigured: false,
 };
 
 describe("SetupModal", () => {
@@ -124,4 +126,44 @@ describe("SetupModal", () => {
     expect(link.tagName).toBe("A");
     expect(link).toHaveClass("setup-link");
   });
+
+  it("renders Groq provider mode with API key configured", () => {
+    const groqSetup: SetupStatus = {
+      ...mockSetup,
+      provider: "groq",
+      groqConfigured: true,
+      instructions: ["Setup complete — using Groq API."],
+    };
+    render(<SetupModal setup={groqSetup} onRecheck={() => {}} onDownload={() => {}} onSetupOcr={() => {}} />);
+    expect(screen.getByText("Groq (Llama 4 Scout)")).toBeInTheDocument();
+    expect(screen.getByText("Configured")).toBeInTheDocument();
+    expect(screen.queryByText("Download model")).not.toBeInTheDocument();
+  });
+
+  it("renders Groq provider mode with API key not configured", () => {
+    const groqSetup: SetupStatus = {
+      ...mockSetup,
+      provider: "groq",
+      groqConfigured: false,
+      instructions: ["Groq API key not configured."],
+    };
+    render(<SetupModal setup={groqSetup} onRecheck={() => {}} onDownload={() => {}} onSetupOcr={() => {}} />);
+    expect(screen.getByText("Groq (Llama 4 Scout)")).toBeInTheDocument();
+    const link = screen.getByText("get a key");
+    expect(link).toBeInTheDocument();
+    expect(link.tagName).toBe("A");
+  });
+
+  it("shows Groq OCR text instead of Python link", () => {
+    const groqSetup: SetupStatus = {
+      ...mockSetup,
+      provider: "groq",
+      groqConfigured: true,
+    };
+    render(<SetupModal setup={groqSetup} onRecheck={() => {}} onDownload={() => {}} onSetupOcr={() => {}} />);
+    expect(screen.getByText("Groq (built-in)")).toBeInTheDocument();
+    expect(screen.queryByText("install Python")).not.toBeInTheDocument();
+  });
+
+
 });

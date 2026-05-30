@@ -15,7 +15,9 @@ type Props = {
 export default function StatusBar({ runtime, isScanning, runningScansCount, selectedCount, faceProgress, onShowModelInfo }: Props) {
   return (
     <div className="statusbar">
-      <span>Model: {runtime?.currentModel || "none"}</span>
+      <span>
+        {runtime?.provider === "groq" ? "Groq" : "Model"}: {runtime?.currentModel || "none"}
+      </span>
       <span
         className={onShowModelInfo ? "statusbar-clickable" : undefined}
         onClick={onShowModelInfo}

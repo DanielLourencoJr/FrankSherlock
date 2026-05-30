@@ -1,19 +1,19 @@
-mod classify;
-mod config;
-mod db;
+pub mod classify;
+pub mod config;
+pub mod db;
 mod error;
-mod exif;
-mod face;
-mod llm;
-mod models;
-mod pdf;
-mod platform;
-mod query_parser;
-mod runtime;
-mod scan;
+pub mod exif;
+pub mod face;
+pub mod llm;
+pub mod models;
+pub mod pdf;
+pub mod platform;
+pub mod query_parser;
+pub mod runtime;
+pub mod scan;
 mod similarity;
-mod thumbnail;
-mod video;
+pub mod thumbnail;
+pub mod video;
 mod video_server;
 
 use std::collections::{HashMap, HashSet};
@@ -42,20 +42,89 @@ struct ModelSelection {
     settings_error: Option<String>,
 }
 
+/// Returns a provider config and a ModelSelection for status display.
+fn select_llm_config(gpu: &platform::gpu::GpuInfo) -> (llm::Provider, ModelSelection) {
+    match config::load_runtime_settings() {
+        Ok(settings) => {
+            let provider_name = settings
+                .provider
+                .as_deref()
+                .unwrap_or("ollama");
+
+            match provider_name {
+                "groq" => {
+                    let model = settings
+                        .groq_model
+                        .clone()
+                        .unwrap_or_else(|| llm::GROQ_DEFAULT_MODEL.to_string());
+                    let api_key = config::resolve_groq_api_key(&settings)
+                        .unwrap_or_default();
+                    let configured = llm::is_api_key_configured(&api_key);
+
+                    let provider = llm::Provider::Groq {
+                        model: model.clone(),
+                        api_key,
+                    };
+
+                    let selection = ModelSelection {
+                        required_model: model.clone(),
+                        scan_model: model,
+                        tier: "cloud".to_string(),
+                        reason: if configured {
+                            "Using Groq cloud API".to_string()
+                        } else {
+                            "Groq API key not configured — set GROQ_API_KEY env var or groq_api_key in settings.toml".to_string()
+                        },
+                        exact_required: false,
+                        settings_error: None,
+                    };
+
+                    (provider, selection)
+                }
+                _ => {
+                    // Default: Ollama
+                    let selection = select_ollama_model(gpu, &settings);
+                    let provider = llm::Provider::Ollama {
+                        model: selection.scan_model.clone(),
+                    };
+                    (provider, selection)
+                }
+            }
+        }
+        Err(e) => {
+            // Settings parse error — fall back to Ollama auto-detect
+            let (recommended_tag, model_tier, model_reason) = llm::recommended_model(gpu);
+            let scan_model = llm::resolve_installed_model(recommended_tag);
+            let selection = ModelSelection {
+                required_model: recommended_tag.to_string(),
+                scan_model: scan_model.clone(),
+                tier: model_tier.as_str().to_string(),
+                reason: model_reason,
+                exact_required: false,
+                settings_error: Some(e.to_string()),
+            };
+            let provider = llm::Provider::Ollama {
+                model: scan_model,
+            };
+            (provider, selection)
+        }
+    }
+}
+
 #[derive(Clone)]
-struct AppState {
-    paths: AppPaths,
-    read_only: bool,
-    gpu_info: Arc<OnceLock<platform::gpu::GpuInfo>>,
-    running_scan_jobs: Arc<Mutex<HashSet<i64>>>,
-    setup_download: Arc<Mutex<llm::DownloadState>>,
-    venv_provision: Arc<Mutex<platform::python::VenvProvisionState>>,
-    cached_system_python: Arc<OnceLock<Option<std::path::PathBuf>>>,
-    cancel_flags: Arc<Mutex<HashMap<i64, Arc<AtomicBool>>>>,
-    cli_folder_path: Option<String>,
-    face_detect_progress: Arc<Mutex<Option<models::FaceDetectProgress>>>,
-    face_detect_cancel: Arc<AtomicBool>,
-    recluster_progress: Arc<Mutex<Option<models::ReclusterProgress>>>,
+pub struct AppState {
+    pub paths: AppPaths,
+    pub read_only: bool,
+    pub gpu_info: Arc<OnceLock<platform::gpu::GpuInfo>>,
+    pub running_scan_jobs: Arc<Mutex<HashSet<i64>>>,
+    pub setup_download: Arc<Mutex<llm::DownloadState>>,
+    pub venv_provision: Arc<Mutex<platform::python::VenvProvisionState>>,
+    pub cached_system_python: Arc<OnceLock<Option<std::path::PathBuf>>>,
+    pub cancel_flags: Arc<Mutex<HashMap<i64, Arc<AtomicBool>>>>,
+    pub cli_folder_path: Option<String>,
+    pub face_detect_progress: Arc<Mutex<Option<models::FaceDetectProgress>>>,
+    pub face_detect_cancel: Arc<AtomicBool>,
+    pub recluster_progress: Arc<Mutex<Option<models::ReclusterProgress>>>,
 }
 
 impl AppState {
@@ -72,31 +141,16 @@ impl AppState {
     }
 }
 
-fn select_model_for_app(gpu: &platform::gpu::GpuInfo) -> ModelSelection {
-    match config::load_runtime_settings() {
-        Ok(settings) => {
-            if let Some(model) = settings.model_override {
-                return ModelSelection {
-                    required_model: model.clone(),
-                    scan_model: model.clone(),
-                    tier: "manual".to_string(),
-                    reason: format!("Manual model override from settings.toml: {model}"),
-                    exact_required: true,
-                    settings_error: None,
-                };
-            }
-        }
-        Err(e) => {
-            let (recommended_tag, model_tier, model_reason) = llm::recommended_model(gpu);
-            return ModelSelection {
-                required_model: recommended_tag.to_string(),
-                scan_model: llm::resolve_installed_model(recommended_tag),
-                tier: model_tier.as_str().to_string(),
-                reason: model_reason,
-                exact_required: false,
-                settings_error: Some(e.to_string()),
-            };
-        }
+fn select_ollama_model(gpu: &platform::gpu::GpuInfo, settings: &config::RuntimeSettings) -> ModelSelection {
+    if let Some(ref model) = settings.model_override {
+        return ModelSelection {
+            required_model: model.clone(),
+            scan_model: model.clone(),
+            tier: "manual".to_string(),
+            reason: format!("Manual model override from settings.toml: {model}"),
+            exact_required: true,
+            settings_error: None,
+        };
     }
 
     let (recommended_tag, model_tier, model_reason) = llm::recommended_model(gpu);
@@ -187,6 +241,9 @@ async fn get_setup_status(state: State<'_, AppState>) -> Result<SetupStatus, Str
 #[tauri::command]
 fn start_setup_download(state: State<'_, AppState>) -> Result<SetupDownloadStatus, String> {
     let setup = compute_setup_status(state.inner());
+    if setup.provider != "ollama" {
+        return Err("Model download is only available for the Ollama provider.".to_string());
+    }
     if !setup.ollama_available {
         return Err("Ollama is not active. Start it first (`ollama serve`).".to_string());
     }
@@ -319,14 +376,16 @@ fn start_scan(
     require_writable(state.inner())?;
     let skip = skip_classify.unwrap_or(false);
 
-    // Only require Ollama setup for full scans (not metadata-only refreshes)
+    // Only require setup for full scans (not metadata-only refreshes)
     if !skip {
         let setup = compute_setup_status(state.inner());
         if !setup.is_ready {
-            return Err(
-                "Setup incomplete: ensure Ollama is running and required models are installed."
-                    .to_string(),
-            );
+            let msg = if setup.provider == "groq" {
+                "Setup incomplete: configure your Groq API key in settings.toml or GROQ_API_KEY environment variable.".to_string()
+            } else {
+                "Setup incomplete: ensure Ollama is running and required models are installed.".to_string()
+            };
+            return Err(msg);
         }
     }
 
@@ -771,7 +830,7 @@ async fn retry_protected_pdfs(
                 // Re-classify with the working password
                 let classification = classify::classify_pdf(
                     abs,
-                    &scan_ctx.model,
+                    &scan_ctx.provider,
                     &scan_ctx.tmp_dir,
                     &scan_ctx.surya_venv_dir,
                     &scan_ctx.surya_script,
@@ -847,7 +906,7 @@ async fn reclassify_pdf(
 
         let classification = classify::classify_pdf(
             abs,
-            &scan_ctx.model,
+            &scan_ctx.provider,
             &scan_ctx.tmp_dir,
             &scan_ctx.surya_venv_dir,
             &scan_ctx.surya_script,
@@ -1400,98 +1459,132 @@ fn run_face_detection(
 
 fn compute_setup_status(app_state: &AppState) -> SetupStatus {
     let gpu = app_state.gpu_info();
-    let model_selection = select_model_for_app(gpu);
+    let (provider, model_selection) = select_llm_config(gpu);
+    let provider_name = provider.name().to_string();
+    let is_groq = matches!(provider, llm::Provider::Groq { .. });
+
     let required_models = vec![model_selection.required_model.clone()];
-
-    let installed = llm::list_installed_models();
-    let ollama_available = installed.is_some();
-    let missing_models = if let Some(models) = installed {
-        required_models
-            .iter()
-            .filter(|required| {
-                if model_selection.exact_required {
-                    !models.iter().any(|m| m == *required)
-                } else {
-                    !models.iter().any(|m| llm::model_satisfies(m, required))
-                }
-            })
-            .cloned()
-            .collect::<Vec<_>>()
-    } else {
-        required_models.clone()
-    };
-
     let python_status = platform::python::check_python_available(&app_state.paths.surya_venv_dir);
     let os = platform::current_os();
 
-    let mut instructions = if !ollama_available {
-        let mut steps = vec!["Ollama is not detected.".to_string()];
-        match os {
-            platform::OsKind::Linux => {
-                steps.push("Install: curl -fsSL https://ollama.com/install.sh | sh".to_string());
-                steps.push("Start: ollama serve (or: systemctl start ollama)".to_string());
-            }
-            platform::OsKind::MacOS => {
-                steps.push(
-                    "Install: brew install ollama (or download from ollama.com/download)"
-                        .to_string(),
-                );
-                steps.push(
-                    "Start the Ollama app from Applications, or run: ollama serve".to_string(),
-                );
-            }
-            platform::OsKind::Windows => {
-                steps.push("Install: download from ollama.com/download".to_string());
-                steps.push("Start Ollama from the Start Menu, or run: ollama serve".to_string());
-            }
-        }
-        steps.push("Then click 'Recheck' above.".to_string());
-        steps
-    } else if !missing_models.is_empty() {
-        vec![
-            format!("Download required model(s): {}", missing_models.join(", ")),
-            "Use the 'Download required model' button and wait for completion.".to_string(),
-        ]
+    let (ollama_available, missing_models, _download_ready) = if is_groq {
+        (false, Vec::new(), false)
     } else {
-        vec!["Setup complete.".to_string()]
+        let installed = llm::list_installed_models();
+        let available = installed.is_some();
+        let missing = if let Some(models) = installed {
+            required_models
+                .iter()
+                .filter(|required| {
+                    if model_selection.exact_required {
+                        !models.iter().any(|m| m == *required)
+                    } else {
+                        !models.iter().any(|m| llm::model_satisfies(m, required))
+                    }
+                })
+                .cloned()
+                .collect::<Vec<_>>()
+        } else {
+            required_models.clone()
+        };
+        (available, missing, true)
     };
 
-    if let Some(err) = &model_selection.settings_error {
-        instructions.push(format!(
-            "Settings warning: could not read settings.toml ({err}); using automatic model selection."
-        ));
-    }
+    let mut instructions: Vec<String> = if is_groq {
+        let key_configured = llm::is_api_key_configured(
+            &config::resolve_groq_api_key(
+                &config::load_runtime_settings().unwrap_or(config::RuntimeSettings {
+                    model_override: None,
+                    provider: Some("groq".to_string()),
+                    groq_api_key: None,
+                    groq_model: None,
+                }),
+            )
+            .unwrap_or_default(),
+        );
+        if !key_configured {
+            vec![
+                "Groq API key not configured.".to_string(),
+                "Set GROQ_API_KEY environment variable or add groq_api_key to settings.toml.".to_string(),
+                "Get a key at: https://console.groq.com/keys".to_string(),
+                "Then click 'Recheck' above.".to_string(),
+            ]
+        } else {
+            vec!["Setup complete — using Groq API.".to_string()]
+        }
+    } else {
+        let mut steps: Vec<String> = if !ollama_available {
+            let mut s = vec!["Ollama is not detected.".to_string()];
+            match os {
+                platform::OsKind::Linux => {
+                    s.push("Install: curl -fsSL https://ollama.com/install.sh | sh".to_string());
+                    s.push("Start: ollama serve (or: systemctl start ollama)".to_string());
+                }
+                platform::OsKind::MacOS => {
+                    s.push("Install: brew install ollama (or download from ollama.com/download)".to_string());
+                    s.push("Start the Ollama app from Applications, or run: ollama serve".to_string());
+                }
+                platform::OsKind::Windows => {
+                    s.push("Install: download from ollama.com/download".to_string());
+                    s.push("Start Ollama from the Start Menu, or run: ollama serve".to_string());
+                }
+            }
+            s.push("Then click 'Recheck' above.".to_string());
+            s
+        } else if !missing_models.is_empty() {
+            vec![
+                format!("Download required model(s): {}", missing_models.join(", ")),
+                "Use the 'Download required model' button and wait for completion.".to_string(),
+            ]
+        } else {
+            vec!["Setup complete.".to_string()]
+        };
+        if let Some(err) = &model_selection.settings_error {
+            steps.push(format!(
+                "Settings warning: could not read settings.toml ({err}); using automatic model selection."
+            ));
+        }
+        steps
+    };
 
-    // Surya/Python is a soft requirement (OCR enrichment)
+    // Surya OCR / Python info — only relevant for Ollama provider
     let system_python_found = app_state.system_python().is_some();
     let surya_venv_ok = python_status.venv_exists && python_status.available;
 
-    if !surya_venv_ok {
-        if system_python_found {
-            instructions
-                .push("OCR (optional): Click 'Setup OCR' to auto-configure Surya OCR.".to_string());
-        } else if !python_status.venv_exists || !python_status.available {
-            match os {
-                platform::OsKind::Linux => {
-                    instructions.push(
-                        "OCR (optional): Python 3 not found. Install Python 3 \
-                         (e.g. sudo apt install python3 python3-venv) then relaunch."
-                            .to_string(),
-                    );
-                }
-                platform::OsKind::MacOS => {
-                    instructions.push(
-                        "OCR (optional): Python 3 not found. Install Python 3 \
-                         (e.g. brew install python@3) then relaunch."
-                            .to_string(),
-                    );
-                }
-                platform::OsKind::Windows => {
-                    instructions.push(
-                        "OCR (optional): Python 3 not found. Install Python 3 \
-                         from python.org/downloads, then relaunch."
-                            .to_string(),
-                    );
+    if is_groq {
+        // For Groq, OCR is handled by the vision model — no Surya needed
+        if !surya_venv_ok {
+            // Just note it, not a requirement
+        }
+    } else {
+        if !surya_venv_ok {
+            if system_python_found {
+                instructions.push(
+                    "OCR (optional): Click 'Setup OCR' to auto-configure Surya OCR.".to_string(),
+                );
+            } else {
+                match os {
+                    platform::OsKind::Linux => {
+                        instructions.push(
+                            "OCR (optional): Python 3 not found. Install Python 3 \
+                             (e.g. sudo apt install python3 python3-venv) then relaunch."
+                                .to_string(),
+                        );
+                    }
+                    platform::OsKind::MacOS => {
+                        instructions.push(
+                            "OCR (optional): Python 3 not found. Install Python 3 \
+                             (e.g. brew install python@3) then relaunch."
+                                .to_string(),
+                        );
+                    }
+                    platform::OsKind::Windows => {
+                        instructions.push(
+                            "OCR (optional): Python 3 not found. Install Python 3 \
+                             from python.org/downloads, then relaunch."
+                                .to_string(),
+                        );
+                    }
                 }
             }
         }
@@ -1516,8 +1609,42 @@ fn compute_setup_status(app_state: &AppState) -> SetupStatus {
         );
     }
 
+    let is_ready = if is_groq {
+        let key_configured = llm::is_api_key_configured(
+            &config::resolve_groq_api_key(
+                &config::load_runtime_settings().unwrap_or(config::RuntimeSettings {
+                    model_override: None,
+                    provider: Some("groq".to_string()),
+                    groq_api_key: None,
+                    groq_model: None,
+                }),
+            )
+            .unwrap_or_default(),
+        );
+        key_configured
+    } else {
+        ollama_available && missing_models.is_empty() && download.status != "running"
+    };
+
+    let groq_configured = if is_groq {
+        llm::is_api_key_configured(
+            &config::resolve_groq_api_key(
+                &config::load_runtime_settings().unwrap_or(config::RuntimeSettings {
+                    model_override: None,
+                    provider: Some("groq".to_string()),
+                    groq_api_key: None,
+                    groq_model: None,
+                }),
+            )
+            .unwrap_or_default(),
+        )
+    } else {
+        false
+    };
+
     SetupStatus {
-        is_ready: ollama_available && missing_models.is_empty() && download.status != "running",
+        is_ready,
+        provider: provider_name,
         ollama_available,
         required_models,
         missing_models,
@@ -1532,6 +1659,7 @@ fn compute_setup_status(app_state: &AppState) -> SetupStatus {
         system_python_found,
         venv_provision,
         ffmpeg_available,
+        groq_configured,
     }
 }
 
@@ -1580,15 +1708,16 @@ fn resolve_pdfium_lib(app_handle: &tauri::AppHandle) -> std::path::PathBuf {
 fn build_scan_context(app_state: &AppState, app_handle: &tauri::AppHandle) -> models::ScanContext {
     let surya_script = resolve_surya_script(app_handle);
     let pdfium_lib_path = resolve_pdfium_lib(app_handle);
-    let model_selection = select_model_for_app(app_state.gpu_info());
+    let (provider, _) = select_llm_config(app_state.gpu_info());
     models::ScanContext {
         db_path: app_state.paths.db_file.clone(),
         thumbnails_dir: app_state.paths.thumbnails_dir.clone(),
         tmp_dir: app_state.paths.tmp_dir.clone(),
         surya_venv_dir: app_state.paths.surya_venv_dir.clone(),
         surya_script,
-        model: model_selection.scan_model,
+        model: provider.model().to_string(),
         pdfium_lib_path,
+        provider,
     }
 }
 
@@ -1619,6 +1748,7 @@ fn spawn_scan_worker_if_needed(
     }
 
     let scan_ctx = build_scan_context(&app_state, app_handle);
+    let is_ollama = matches!(scan_ctx.provider, llm::Provider::Ollama { .. });
     let jobs = app_state.running_scan_jobs.clone();
     let cancel_flags = app_state.cancel_flags.clone();
     let app_state_for_task = app_state.clone();
@@ -1660,8 +1790,8 @@ fn spawn_scan_worker_if_needed(
             }
         }
 
-        // Only unload models once ALL scan jobs have finished
-        if all_jobs_done {
+        // Only unload Ollama models once ALL scan jobs have finished
+        if all_jobs_done && is_ollama {
             if let Err(e) = llm::cleanup_loaded_models() {
                 log::warn!("Auto-cleanup after all scans finished: {e}");
             }
@@ -1669,8 +1799,9 @@ fn spawn_scan_worker_if_needed(
     });
 }
 
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() {
+/// Initialize the core application state (paths, DB, settings).
+/// Shared between the Tauri GUI and the CLI binary.
+pub fn init_app() -> AppState {
     let (paths, read_only) = resolve_paths()
         .and_then(|paths| {
             let dirs_ok = prepare_dirs(&paths).is_ok();
@@ -1725,18 +1856,7 @@ pub fn run() {
         log::warn!("Failed to prepare runtime settings file: {e}");
     }
 
-    let cli_folder_path: Option<String> =
-        std::env::args()
-            .nth(1)
-            .and_then(|raw| match config::expand_and_canonicalize(&raw) {
-                Ok(p) => Some(p.display().to_string()),
-                Err(e) => {
-                    eprintln!("Invalid folder argument '{}': {}", raw, e);
-                    None
-                }
-            });
-
-    let app_state = AppState {
+    AppState {
         paths,
         read_only,
         gpu_info: Arc::new(OnceLock::new()),
@@ -1745,11 +1865,35 @@ pub fn run() {
         venv_provision: Arc::new(Mutex::new(platform::python::VenvProvisionState::idle())),
         cached_system_python: Arc::new(OnceLock::new()),
         cancel_flags: Arc::new(Mutex::new(HashMap::new())),
-        cli_folder_path,
+        cli_folder_path: None,
         face_detect_progress: Arc::new(Mutex::new(None)),
         face_detect_cancel: Arc::new(AtomicBool::new(false)),
         recluster_progress: Arc::new(Mutex::new(None)),
-    };
+    }
+}
+
+/// Build a ScanContext for the CLI binary (no Tauri AppHandle available).
+/// Uses `CARGO_MANIFEST_DIR` fallback paths for surya_ocr.py and pdfium lib.
+pub fn build_cli_scan_context(app_state: &AppState) -> models::ScanContext {
+    let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let surya_script = manifest_dir.join("scripts").join("surya_ocr.py");
+    let pdfium_lib_path = manifest_dir.join("lib");
+    let (provider, _) = select_llm_config(app_state.gpu_info());
+    models::ScanContext {
+        db_path: app_state.paths.db_file.clone(),
+        thumbnails_dir: app_state.paths.thumbnails_dir.clone(),
+        tmp_dir: app_state.paths.tmp_dir.clone(),
+        surya_venv_dir: app_state.paths.surya_venv_dir.clone(),
+        surya_script,
+        model: provider.model().to_string(),
+        pdfium_lib_path,
+        provider,
+    }
+}
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    let app_state = init_app();
 
     tauri::Builder::default()
         .plugin(
@@ -1764,10 +1908,10 @@ pub fn run() {
         .manage(app_state)
         .on_window_event(|_window, event| {
             if let tauri::WindowEvent::CloseRequested { .. } = event {
+                // Best-effort cleanup for Ollama models
                 let _ = llm::cleanup_loaded_models();
             }
         })
-        // CLI folder handling is delegated to the frontend via get_cli_folder_path.
         .invoke_handler(tauri::generate_handler![
             app_health,
             get_app_paths,

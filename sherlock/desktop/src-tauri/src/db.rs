@@ -328,7 +328,6 @@ pub fn database_stats(db_path: &Path) -> AppResult<DbStats> {
     })
 }
 
-#[cfg(test)]
 pub fn upsert_root(db_path: &Path, root_path: &str) -> AppResult<i64> {
     let conn = open_conn(db_path)?;
     upsert_root_conn(&conn, root_path)

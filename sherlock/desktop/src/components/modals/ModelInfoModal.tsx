@@ -20,6 +20,8 @@ function vendorLabel(vendor: string): string {
 }
 
 export default function ModelInfoModal({ runtime, setup, onClose }: Props) {
+  const isGroq = runtime.provider === "groq";
+
   return (
     <ModalOverlay onBackdropClick={onClose}>
       <div className="modal-base model-info-modal" onClick={(e) => e.stopPropagation()}>
@@ -48,49 +50,71 @@ export default function ModelInfoModal({ runtime, setup, onClose }: Props) {
             </dl>
           </div>
 
-          <div className="model-info-section">
-            <h4>Model selection</h4>
-            <dl>
-              {setup && (
-                <>
-                  <dt>Recommended</dt>
-                  <dd className="model-tag">{setup.recommendedModel}</dd>
-                  <dt>Tier</dt>
-                  <dd>{setup.modelTier}</dd>
-                  <dt>Reason</dt>
-                  <dd>{setup.modelSelectionReason}</dd>
-                </>
-              )}
-              <dt>Ollama</dt>
-              <dd>{runtime.ollamaAvailable ? "Running" : "Not detected"}</dd>
-            </dl>
-          </div>
-
-          <div className="model-info-section">
-            <h4>Loaded models</h4>
-            {runtime.loadedModels.length > 0 ? (
-              <ul className="model-list">
-                {runtime.loadedModels.map((m) => (
-                  <li key={m}>
-                    <span className="model-tag">{m}</span>
-                    {runtime.currentModel === m && <span className="model-active">active</span>}
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="model-empty">No models currently loaded</p>
-            )}
-          </div>
-
-          {setup && setup.missingModels.length > 0 && (
+          {isGroq ? (
             <div className="model-info-section">
-              <h4>Missing models</h4>
-              <ul className="model-list">
-                {setup.missingModels.map((m) => (
-                  <li key={m}><span className="model-tag model-missing">{m}</span></li>
-                ))}
-              </ul>
+              <h4>AI Provider</h4>
+              <dl>
+                <dt>Provider</dt>
+                <dd>Groq</dd>
+                <dt>Model</dt>
+                <dd className="model-tag">{runtime.currentModel || "meta-llama/llama-4-scout-17b-16e-instruct"}</dd>
+                <dt>Status</dt>
+                <dd>{setup?.groqConfigured ? "API key configured" : "API key not configured"}</dd>
+                {setup && (
+                  <>
+                    <dt>Reason</dt>
+                    <dd>{setup.modelSelectionReason}</dd>
+                  </>
+                )}
+              </dl>
             </div>
+          ) : (
+            <>
+              <div className="model-info-section">
+                <h4>Model selection</h4>
+                <dl>
+                  {setup && (
+                    <>
+                      <dt>Recommended</dt>
+                      <dd className="model-tag">{setup.recommendedModel}</dd>
+                      <dt>Tier</dt>
+                      <dd>{setup.modelTier}</dd>
+                      <dt>Reason</dt>
+                      <dd>{setup.modelSelectionReason}</dd>
+                    </>
+                  )}
+                  <dt>Ollama</dt>
+                  <dd>{runtime.ollamaAvailable ? "Running" : "Not detected"}</dd>
+                </dl>
+              </div>
+
+              <div className="model-info-section">
+                <h4>Loaded models</h4>
+                {runtime.loadedModels.length > 0 ? (
+                  <ul className="model-list">
+                    {runtime.loadedModels.map((m) => (
+                      <li key={m}>
+                        <span className="model-tag">{m}</span>
+                        {runtime.currentModel === m && <span className="model-active">active</span>}
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="model-empty">No models currently loaded</p>
+                )}
+              </div>
+
+              {setup && setup.missingModels.length > 0 && (
+                <div className="model-info-section">
+                  <h4>Missing models</h4>
+                  <ul className="model-list">
+                    {setup.missingModels.map((m) => (
+                      <li key={m}><span className="model-tag model-missing">{m}</span></li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </>
           )}
         </div>
 

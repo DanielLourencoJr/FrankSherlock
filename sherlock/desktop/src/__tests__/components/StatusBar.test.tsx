@@ -7,7 +7,7 @@ describe("StatusBar", () => {
   it("shows VRAM info when available", () => {
     render(
       <StatusBar
-        runtime={{ os: "linux", vramUsedMib: 2048, vramTotalMib: 8192, ollamaAvailable: true, loadedModels: [], currentModel: "qwen", gpuVendor: "nvidia", unifiedMemory: false, systemRamMib: 32768 }}
+        runtime={{ os: "linux", vramUsedMib: 2048, vramTotalMib: 8192, ollamaAvailable: true, loadedModels: [], currentModel: "qwen", gpuVendor: "nvidia", unifiedMemory: false, systemRamMib: 32768, provider: "ollama" }}
         isScanning={false}
         runningScansCount={0}
         selectedCount={0}
@@ -20,7 +20,7 @@ describe("StatusBar", () => {
   it("shows n/a when VRAM is not available", () => {
     render(
       <StatusBar
-        runtime={{ os: "linux", vramUsedMib: null, vramTotalMib: null, ollamaAvailable: false, loadedModels: [], gpuVendor: "unknown", unifiedMemory: false, systemRamMib: 16384 }}
+        runtime={{ os: "linux", vramUsedMib: null, vramTotalMib: null, ollamaAvailable: false, loadedModels: [], gpuVendor: "unknown", unifiedMemory: false, systemRamMib: 16384, provider: "ollama" }}
         isScanning={false}
         runningScansCount={0}
         selectedCount={0}
@@ -59,7 +59,7 @@ describe("StatusBar", () => {
   it("shows model name on the left", () => {
     render(
       <StatusBar
-        runtime={{ os: "linux", currentModel: "llama3", ollamaAvailable: true, loadedModels: ["llama3"], gpuVendor: "nvidia", unifiedMemory: false, systemRamMib: 32768 }}
+        runtime={{ os: "linux", currentModel: "llama3", ollamaAvailable: true, loadedModels: ["llama3"], gpuVendor: "nvidia", unifiedMemory: false, systemRamMib: 32768, provider: "ollama" }}
         isScanning={false}
         runningScansCount={0}
         selectedCount={0}
@@ -78,7 +78,7 @@ describe("StatusBar", () => {
     const onShowModelInfo = vi.fn();
     render(
       <StatusBar
-        runtime={{ os: "linux", vramUsedMib: 1024, vramTotalMib: 8192, ollamaAvailable: true, loadedModels: [], gpuVendor: "nvidia", unifiedMemory: false, systemRamMib: 32768 }}
+        runtime={{ os: "linux", vramUsedMib: 1024, vramTotalMib: 8192, ollamaAvailable: true, loadedModels: [], gpuVendor: "nvidia", unifiedMemory: false, systemRamMib: 32768, provider: "ollama" }}
         isScanning={false}
         runningScansCount={0}
         selectedCount={0}

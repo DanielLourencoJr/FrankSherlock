@@ -5,7 +5,8 @@ use crate::platform::process::silent_command;
 use regex::Regex;
 use serde_json::Value;
 
-use crate::llm::{ollama_generate, parse_json_response};
+use crate::llm::{generate, parse_json_response};
+use crate::llm::Provider;
 use crate::models::ClassificationResult;
 
 // ---------------------------------------------------------------------------
@@ -84,6 +85,45 @@ const VALID_MEDIA_TYPES: &[&str] = &[
     "artwork",
     "other",
 ];
+
+
+/// Check whether a parsed JSON result is the model echoing back the schema
+/// template instead of providing real analysis. Smaller models sometimes
+/// copy placeholder values like `"name"` or the pipe-delimited enum literal.
+fn is_schema_echo(value: &Value) -> bool {
+    // media_type containing a pipe means the model echoed the enum literal
+    if let Some(mt) = value.get("media_type").and_then(|v| v.as_str()) {
+        if mt.contains('|') {
+            return true;
+        }
+    }
+    // description being empty + confidence 0 + candidates containing "name"
+    // is a strong signal the model just returned the template
+    let desc_empty = value
+        .get("description")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().is_empty())
+        .unwrap_or(true);
+    let conf_zero = value
+        .get("confidence")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0)
+        == 0.0;
+    if !desc_empty || !conf_zero {
+        return false;
+    }
+    // Check if series_candidates or character_candidates contain "name"
+    // (the schema placeholder)
+    let has_name_placeholder = |key: &str| -> bool {
+        value
+            .get(key)
+            .and_then(|v| v.as_array())
+            .map(|arr| arr.iter().any(|x| x.as_str() == Some("name")))
+            .unwrap_or(false)
+    };
+    has_name_placeholder("series_candidates")
+        || has_name_placeholder("character_candidates")
+}
 
 /// Regex-based salvage when all JSON attempts fail.
 pub fn salvage_primary_from_raw(raw: &str) -> Option<Value> {
@@ -353,36 +393,214 @@ fn first_frame_if_gif(image_path: &Path, tmp_dir: &Path) -> PathBuf {
 }
 
 // ---------------------------------------------------------------------------
+// Simplified fallback: plain-text prompt (no JSON schema)
+// ---------------------------------------------------------------------------
+
+/// Simplified initial prompt — just a description. Small models can't handle
+/// multi-part questions; each field gets its own targeted follow-up call.
+const SIMPLE_PRIMARY_PROMPT: &str = "Describe this image in one sentence.";
+
+/// Ask the model with a plain-text prompt (one question per field) when the
+/// complex JSON schema prompt produces garbage or the model times out.
+/// Returns the parsed value, or None if the model doesn't respond.
+fn classify_primary_simple(provider: &Provider, image_path: &Path, tmp_dir: &Path) -> Option<Value> {
+    let effective_path = first_frame_if_gif(image_path, tmp_dir);
+
+    log::info!(
+        "Simple fallback: prompting '{}' for {}",
+        provider.name(),
+        effective_path.display(),
+    );
+
+    // Step 1: Get description
+    let description = ask_field(provider, &effective_path, SIMPLE_PRIMARY_PROMPT)
+        .unwrap_or_default();
+
+    if description.is_empty() {
+        log::warn!("Simple fallback: empty description from '{}'", provider.name());
+        return None;
+    }
+
+    // Step 2: Get media type
+    let media_type = ask_field(
+        provider,
+        &effective_path,
+        "What type is this image? Answer with one word: photo, screenshot, anime, manga, document, artwork, or other.",
+    )
+    .map(|mt| {
+        let lower = mt.to_lowercase();
+        find_valid_media_type(&lower)
+            .unwrap_or("other")
+            .to_string()
+    })
+    .unwrap_or_else(|| "other".to_string());
+
+    // Step 3: Get booleans
+    let contains_text = ask_field(
+        provider,
+        &effective_path,
+        "Does this image contain visible text? Answer yes or no.",
+    )
+    .map(|t| t.to_lowercase().contains("yes"))
+    .unwrap_or(false);
+
+    let is_anime_related = (media_type == "anime" || media_type == "manga")
+        || ask_field(
+            provider,
+            &effective_path,
+            "Is this image anime or manga related? Answer yes or no.",
+        )
+        .map(|t| t.to_lowercase().contains("yes"))
+        .unwrap_or(false);
+
+    let is_document_like = (media_type == "document" || media_type == "screenshot")
+        || ask_field(
+            provider,
+            &effective_path,
+            "Is this image a document, receipt, or screenshot of text? Answer yes or no.",
+        )
+        .map(|t| t.to_lowercase().contains("yes"))
+        .unwrap_or(false);
+
+    // Step 4: Get confidence
+    let confidence = ask_field(
+        provider,
+        &effective_path,
+        "Rate your confidence about this image from 0 to 1.",
+    )
+    .and_then(|c| parse_flexible_float(&c))
+    .unwrap_or(0.0);
+
+    log::info!(
+        "Simple fallback: desc='{}' type={} text={} anime={} doc={} conf={}",
+        description.chars().take(80).collect::<String>(),
+        media_type,
+        contains_text,
+        is_anime_related,
+        is_document_like,
+        confidence,
+    );
+
+    Some(serde_json::json!({
+        "media_type": media_type,
+        "contains_text": contains_text,
+        "is_anime_related": is_anime_related,
+        "is_document_like": is_document_like,
+        "description": description,
+        "series_candidates": [],
+        "character_candidates": [],
+        "confidence": confidence,
+    }))
+}
+
+/// Send a quick targeted question to the model (image is already encoded,
+/// model is loaded — fast). Returns the raw response text.
+fn ask_field(provider: &Provider, image_path: &Path, question: &str) -> Option<String> {
+    let resp = generate(provider, question, Some(image_path), 200, 60, false);
+    if resp.ok {
+        let text = resp.raw.trim().to_string();
+        if text.is_empty() { None } else { Some(text) }
+    } else {
+        log::warn!("ask_field failed for '{}': {}", provider.name(), resp.raw);
+        None
+    }
+}
+
+/// Pick the first valid media type keyword found in text.
+fn find_valid_media_type(text: &str) -> Option<&'static str> {
+    let lower = text.to_lowercase();
+    for mt in ["screenshot", "anime", "manga", "photo", "document", "artwork"] {
+        if lower.contains(mt) {
+            return Some(mt);
+        }
+    }
+    None
+}
+
+/// Parse a float from free text, accepting `.85`, `0.85`, `85%`, etc.
+fn parse_flexible_float(s: &str) -> Option<f64> {
+    let re = Regex::new(r"(\d*\.?\d+)").ok()?;
+    let val: f64 = re.captures(s)?.get(1)?.as_str().parse().ok()?;
+    if val > 1.0 && s.contains('%') {
+        // Treat percentages (85% → 0.85)
+        Some(val / 100.0)
+    } else if (0.0..=1.0).contains(&val) {
+        Some(val)
+    } else {
+        None
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Stage 1: Primary classification
 // ---------------------------------------------------------------------------
 
-fn classify_primary(model: &str, image_path: &Path, tmp_dir: &Path) -> Value {
+/// Models known to produce garbage JSON schema echoes instead of real analysis.
+/// The simplified plain-text prompt skips directly for these models rather than
+/// wasting 3 attempts + salvage trying to coax valid JSON out of them.
+const SIMPLE_ONLY_MODELS: &[&str] = &["moondream", "smolvlm2"];
+
+/// Check whether `model` is known to struggle with complex JSON schema prompts.
+/// When true, `classify_primary` skips the 3 JSON attempts and goes straight to
+/// the simplified plain-text fallback.
+fn is_simple_model(model: &str) -> bool {
+    let lower = model.to_lowercase();
+    SIMPLE_ONLY_MODELS.iter().any(|m| lower.contains(m))
+}
+
+fn classify_primary(provider: &Provider, image_path: &Path, tmp_dir: &Path) -> Value {
     let effective_path = first_frame_if_gif(image_path, tmp_dir);
 
+    // Skip straight to the simplified prompt for models known to echo JSON
+    // schema templates (e.g. moondream), avoiding 3 wasted timeouts.
+    if is_simple_model(provider.model()) {
+        log::info!(
+            "Model '{}' is known to struggle with JSON schemas — using simplified plain-text prompt",
+            provider.name(),
+        );
+        return classify_primary_simple(provider, &effective_path, tmp_dir)
+            .unwrap_or_else(|| safe_default_primary());
+    }
+
     // Attempt 1: primary prompt with json_mode
-    let resp1 = ollama_generate(model, PRIMARY_PROMPT, Some(&effective_path), 500, 180, true);
+    let resp1 = generate(provider, PRIMARY_PROMPT, Some(&effective_path), 500, 180, true);
     if resp1.ok {
         if let Some(v) = parse_json_response(&resp1.raw) {
-            if v.get("media_type").and_then(|v| v.as_str()).is_some() {
+            if v.get("media_type").and_then(|v| v.as_str()).is_some() && !is_schema_echo(&v) {
                 return v;
             }
+            // Schema echo on first attempt: model can't handle JSON prompts.
+            // Skip remaining JSON attempts and go straight to the simplified
+            // prompt while the model is still fresh.
+            if v.get("media_type").and_then(|v| v.as_str()).is_some() && is_schema_echo(&v) {
+                log::info!(
+                    "Model '{}' produced schema echo in attempt 1 — switching to simplified prompt",
+                    provider.name(),
+                );
+                return classify_primary_simple(provider, &effective_path, tmp_dir)
+                    .unwrap_or_else(safe_default_primary);
+            }
         }
+    } else {
+        log::warn!("Attempt 1 failed for '{}': {}", provider.name(), resp1.raw);
     }
 
     // Attempt 2: primary prompt without json_mode
     let prompt2 = format!("{PRIMARY_PROMPT} Return a single JSON object only.");
-    let resp2 = ollama_generate(model, &prompt2, Some(&effective_path), 500, 180, false);
+    let resp2 = generate(provider, &prompt2, Some(&effective_path), 500, 180, false);
     if resp2.ok {
         if let Some(v) = parse_json_response(&resp2.raw) {
-            if v.get("media_type").and_then(|v| v.as_str()).is_some() {
+            if v.get("media_type").and_then(|v| v.as_str()).is_some() && !is_schema_echo(&v) {
                 return v;
             }
         }
+    } else {
+        log::warn!("Attempt 2 failed for '{}': {}", provider.name(), resp2.raw);
     }
 
     // Attempt 3: fallback prompt with json_mode
-    let resp3 = ollama_generate(
-        model,
+    let resp3 = generate(
+        provider,
         PRIMARY_PROMPT_FALLBACK,
         Some(&effective_path),
         260,
@@ -391,19 +609,37 @@ fn classify_primary(model: &str, image_path: &Path, tmp_dir: &Path) -> Value {
     );
     if resp3.ok {
         if let Some(v) = parse_json_response(&resp3.raw) {
-            if v.get("media_type").and_then(|v| v.as_str()).is_some() {
+            if v.get("media_type").and_then(|v| v.as_str()).is_some() && !is_schema_echo(&v) {
                 return v;
             }
         }
+    } else {
+        log::warn!("Attempt 3 failed for '{}': {}", provider.name(), resp3.raw);
     }
 
     // Salvage from raw attempts
     let combined = format!("{}\n{}\n{}", resp1.raw, resp2.raw, resp3.raw);
     if let Some(v) = salvage_primary_from_raw(&combined) {
+        if !is_schema_echo(&v) {
+            return v;
+        }
+    }
+
+    // Simplified fallback: plain-text prompt without JSON schema
+    log::info!(
+        "All JSON attempts failed for '{}' — trying simplified plain-text prompt",
+        provider.name(),
+    );
+    if let Some(v) = classify_primary_simple(provider, &effective_path, tmp_dir) {
         return v;
     }
 
-    // Safe default
+    log::warn!("All classification strategies failed for '{}' — returning safe default", provider.name());
+    safe_default_primary()
+}
+
+/// Return a safe default classification result used when all prompts fail.
+fn safe_default_primary() -> Value {
     serde_json::json!({
         "media_type": "other",
         "contains_text": false,
@@ -420,10 +656,10 @@ fn classify_primary(model: &str, image_path: &Path, tmp_dir: &Path) -> Value {
 // Stage 2a: Anime enrichment
 // ---------------------------------------------------------------------------
 
-fn classify_anime_details(model: &str, image_path: &Path, tmp_dir: &Path) -> Option<Value> {
+fn classify_anime_details(provider: &Provider, image_path: &Path, tmp_dir: &Path) -> Option<Value> {
     let effective_path = first_frame_if_gif(image_path, tmp_dir);
 
-    let resp = ollama_generate(model, ANIME_PROMPT, Some(&effective_path), 600, 180, true);
+    let resp = generate(provider, ANIME_PROMPT, Some(&effective_path), 600, 180, true);
     if resp.ok {
         if let Some(v) = parse_json_response(&resp.raw) {
             let conf = v.get("confidence").and_then(|c| c.as_f64()).unwrap_or(0.0);
@@ -440,7 +676,7 @@ fn classify_anime_details(model: &str, image_path: &Path, tmp_dir: &Path) -> Opt
 
     // Retry without json_mode
     let prompt2 = format!("{ANIME_PROMPT} Return a single JSON object only.");
-    let resp2 = ollama_generate(model, &prompt2, Some(&effective_path), 600, 180, false);
+    let resp2 = generate(provider, &prompt2, Some(&effective_path), 600, 180, false);
     if resp2.ok {
         if let Some(v) = parse_json_response(&resp2.raw) {
             return Some(v);
@@ -489,9 +725,9 @@ fn run_surya_ocr(image_path: &Path, surya_venv: &Path, surya_script: &Path) -> O
     }
 }
 
-fn run_llm_ocr(model: &str, image_path: &Path, tmp_dir: &Path) -> OcrResult {
+fn run_llm_ocr(provider: &Provider, image_path: &Path, tmp_dir: &Path) -> OcrResult {
     let effective_path = first_frame_if_gif(image_path, tmp_dir);
-    let resp = ollama_generate(model, OCR_PROMPT, Some(&effective_path), 2000, 240, false);
+    let resp = generate(provider, OCR_PROMPT, Some(&effective_path), 2000, 240, false);
     if !resp.ok {
         return OcrResult::failed("vision_llm");
     }
@@ -526,28 +762,36 @@ impl OcrResult {
 }
 
 fn run_ocr(
-    model: &str,
+    provider: &Provider,
     image_path: &Path,
     tmp_dir: &Path,
     surya_venv: &Path,
     surya_script: &Path,
 ) -> OcrResult {
-    let surya = run_surya_ocr(image_path, surya_venv, surya_script);
-    if surya.ok && !surya.text.is_empty() {
-        return surya;
+    match provider {
+        Provider::Groq { .. } => {
+            // Groq vision handles OCR natively — skip Surya
+            run_llm_ocr(provider, image_path, tmp_dir)
+        }
+        Provider::Ollama { .. } => {
+            let surya = run_surya_ocr(image_path, surya_venv, surya_script);
+            if surya.ok && !surya.text.is_empty() {
+                return surya;
+            }
+            run_llm_ocr(provider, image_path, tmp_dir)
+        }
     }
-    run_llm_ocr(model, image_path, tmp_dir)
 }
 
 // ---------------------------------------------------------------------------
 // Stage 2c: Document field extraction
 // ---------------------------------------------------------------------------
 
-fn extract_document_fields(model: &str, ocr_text: &str) -> Value {
+fn extract_document_fields(provider: &Provider, ocr_text: &str) -> Value {
     let regex_fields = extract_receipt_regex(ocr_text);
 
     let prompt = format!("{RECEIPT_PROMPT}{ocr_text}");
-    let resp = ollama_generate(model, &prompt, None, 600, 180, true);
+    let resp = generate(provider, &prompt, None, 600, 180, true);
     let llm_fields = if resp.ok {
         parse_json_response(&resp.raw)
     } else {
@@ -648,13 +892,13 @@ fn extract_document_fields(model: &str, ocr_text: &str) -> Value {
 
 pub fn classify_image(
     image_path: &Path,
-    model: &str,
+    provider: &Provider,
     tmp_dir: &Path,
     surya_venv: &Path,
     surya_script: &Path,
 ) -> ClassificationResult {
     log::info!("Classifying: {}", image_path.display());
-    let primary = classify_primary(model, image_path, tmp_dir);
+    let primary = classify_primary(provider, image_path, tmp_dir);
 
     let media_type = primary
         .get("media_type")
@@ -677,7 +921,7 @@ pub fn classify_image(
 
     // Anime enrichment
     if should_run_anime_enrichment(&primary) {
-        if let Some(anime) = classify_anime_details(model, image_path, tmp_dir) {
+        if let Some(anime) = classify_anime_details(provider, image_path, tmp_dir) {
             if let Some(series) = anime.get("series").and_then(clean_nullable_str) {
                 full_description = format!("{full_description} [Series: {series}]");
             }
@@ -718,11 +962,11 @@ pub fn classify_image(
 
     // Document enrichment
     if should_run_document_enrichment(&primary) {
-        let ocr = run_ocr(model, image_path, tmp_dir, surya_venv, surya_script);
+        let ocr = run_ocr(provider, image_path, tmp_dir, surya_venv, surya_script);
         if ocr.ok && !ocr.text.is_empty() {
             extracted_text = ocr.text.clone();
 
-            let doc_fields = extract_document_fields(model, &ocr.text);
+            let doc_fields = extract_document_fields(provider, &ocr.text);
             if let Some(kind) = doc_fields.get("document_kind").and_then(clean_nullable_str) {
                 full_description = format!("{full_description} [Doc: {kind}]");
             }
@@ -770,7 +1014,7 @@ const VIDEO_PROMPT: &str = concat!(
 
 pub fn classify_video(
     video_path: &Path,
-    model: &str,
+    provider: &Provider,
     tmp_dir: &Path,
     _surya_venv: &Path,
     _surya_script: &Path,
@@ -830,7 +1074,7 @@ pub fn classify_video(
     let primary = if !keyframes.is_empty() {
         // Use the best keyframe (first = least likely to be black/intro)
         let best_frame = &keyframes[0];
-        let resp = ollama_generate(model, VIDEO_PROMPT, Some(best_frame), 500, 180, true);
+        let resp = generate(provider, VIDEO_PROMPT, Some(best_frame), 500, 180, true);
         if resp.ok {
             parse_json_response(&resp.raw)
         } else {
@@ -893,7 +1137,7 @@ pub fn classify_video(
     // Anime enrichment on the best keyframe
     if is_anime {
         if let Some(best_frame) = keyframes.first() {
-            if let Some(anime) = classify_anime_details(model, best_frame, &video_tmp) {
+            if let Some(anime) = classify_anime_details(provider, best_frame, &video_tmp) {
                 if let Some(series) = anime.get("series").and_then(clean_nullable_str) {
                     description = format!("{description} [Series: {series}]");
                 }
@@ -965,7 +1209,7 @@ pub fn classify_video(
 
 pub fn classify_pdf(
     pdf_path: &Path,
-    model: &str,
+    provider: &Provider,
     tmp_dir: &Path,
     surya_venv: &Path,
     surya_script: &Path,
@@ -1013,7 +1257,7 @@ pub fn classify_pdf(
                 log::warn!("Failed to save PDF page for classification: {e}");
                 None
             } else {
-                let result = classify_primary(model, &tmp_img_path, tmp_dir);
+                let result = classify_primary(provider, &tmp_img_path, tmp_dir);
                 Some(result)
             }
         }
@@ -1050,7 +1294,7 @@ pub fn classify_pdf(
     if let Some(ref p) = primary {
         // Anime enrichment on the rendered page (same logic as classify_image)
         if should_run_anime_enrichment(p) && tmp_img_path.exists() {
-            if let Some(anime) = classify_anime_details(model, &tmp_img_path, tmp_dir) {
+            if let Some(anime) = classify_anime_details(provider, &tmp_img_path, tmp_dir) {
                 if let Some(series) = anime.get("series").and_then(clean_nullable_str) {
                     description = format!("{description} [Series: {series}]");
                 }
@@ -1101,7 +1345,7 @@ pub fn classify_pdf(
         } else {
             &full_text
         };
-        let doc_fields = extract_document_fields(model, context);
+        let doc_fields = extract_document_fields(provider, context);
         if let Some(kind) = doc_fields.get("document_kind").and_then(clean_nullable_str) {
             description = format!("{description} [Doc: {kind}]");
         }
@@ -1112,11 +1356,11 @@ pub fn classify_pdf(
         // Scanned PDF: run OCR on the already-rendered page
         extracted_text = String::new();
         if tmp_img_path.exists() {
-            let ocr = run_ocr(model, &tmp_img_path, tmp_dir, surya_venv, surya_script);
+            let ocr = run_ocr(provider, &tmp_img_path, tmp_dir, surya_venv, surya_script);
             if ocr.ok && !ocr.text.is_empty() {
                 extracted_text = ocr.text.clone();
 
-                let doc_fields = extract_document_fields(model, &ocr.text);
+            let doc_fields = extract_document_fields(provider, &ocr.text);
                 if let Some(kind) = doc_fields.get("document_kind").and_then(clean_nullable_str) {
                     description = format!("{description} [Doc: {kind}]");
                 }
@@ -1183,6 +1427,49 @@ fn detect_lang_hint(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn is_schema_echo_detects_pipe_in_media_type() {
+        let v = serde_json::json!({"media_type":"screenshot|anime|manga","description":"","confidence":0.0});
+        assert!(is_schema_echo(&v));
+    }
+
+    #[test]
+    fn is_schema_echo_rejects_valid_result() {
+        let v = serde_json::json!({"media_type":"photo","description":"A cat","confidence":0.9,"series_candidates":[],"character_candidates":[]});
+        assert!(!is_schema_echo(&v));
+    }
+
+    #[test]
+    fn is_schema_echo_detects_placeholder_name() {
+        let v = serde_json::json!({"media_type":"other","description":"","confidence":0.0,"series_candidates":["name"],"character_candidates":[]});
+        assert!(is_schema_echo(&v));
+    }
+
+    #[test]
+    fn is_schema_echo_detects_non_empty_desc_as_not_echo() {
+        let v = serde_json::json!({"media_type":"photo","description":"A cat","confidence":0.0,"series_candidates":[],"character_candidates":[]});
+        assert!(!is_schema_echo(&v));
+    }
+
+    #[test]
+    fn find_valid_media_type_finds_keywords() {
+        assert_eq!(find_valid_media_type("this is an anime image"), Some("anime"));
+        assert_eq!(find_valid_media_type("screenshot of a form"), Some("screenshot"));
+        assert_eq!(find_valid_media_type("a photo of a cat"), Some("photo"));
+        assert_eq!(find_valid_media_type("no matching type here"), None);
+    }
+
+    #[test]
+    fn parse_flexible_float_parses() {
+        let result = parse_flexible_float("0.85").unwrap();
+        assert!((result - 0.85).abs() < 0.01);
+    }
+
+    #[test]
+    fn parse_flexible_float_out_of_range() {
+        assert!(parse_flexible_float("2.5").is_none());
+    }
 
     #[test]
     fn salvage_primary_with_all_fields() {
@@ -1300,5 +1587,17 @@ mod tests {
     #[test]
     fn detect_lang_hint_empty() {
         assert_eq!(detect_lang_hint(""), "unknown");
+    }
+
+    #[test]
+    fn parse_flexible_float_percent() {
+        let result = parse_flexible_float("85%").unwrap();
+        assert!((result - 0.85).abs() < 0.01);
+    }
+
+    #[test]
+    fn parse_flexible_float_85_variant() {
+        let result = parse_flexible_float("0.85").unwrap();
+        assert!((result - 0.85).abs() < 0.01);
     }
 }

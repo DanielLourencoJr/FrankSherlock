@@ -14,10 +14,12 @@ const mockRuntime: RuntimeStatus = {
   unifiedMemory: false,
   systemRamMib: 32768,
   ollamaAvailable: true,
+  provider: "ollama",
 };
 
 const mockSetup: SetupStatus = {
   isReady: true,
+  provider: "ollama",
   ollamaAvailable: true,
   requiredModels: ["qwen2.5vl:7b"],
   missingModels: [],
@@ -32,6 +34,7 @@ const mockSetup: SetupStatus = {
   systemPythonFound: true,
   venvProvision: { status: "idle", step: "", progressPct: 0, message: "No OCR setup in progress" },
   ffmpegAvailable: true,
+  groqConfigured: false,
 };
 
 describe("ModelInfoModal", () => {
@@ -85,5 +88,60 @@ describe("ModelInfoModal", () => {
     render(<ModelInfoModal runtime={mockRuntime} setup={mockSetup} onClose={onClose} />);
     await user.click(screen.getByText("Close"));
     expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it("renders Groq provider info when provider is groq", () => {
+    const groqRuntime: RuntimeStatus = {
+      ...mockRuntime,
+      provider: "groq",
+      currentModel: "meta-llama/llama-4-scout-17b-16e-instruct",
+      loadedModels: [],
+      ollamaAvailable: false,
+    };
+    const groqSetup: SetupStatus = {
+      ...mockSetup,
+      provider: "groq",
+      groqConfigured: true,
+      recommendedModel: "meta-llama/llama-4-scout-17b-16e-instruct",
+    };
+    render(<ModelInfoModal runtime={groqRuntime} setup={groqSetup} onClose={() => {}} />);
+    expect(screen.getByText("Groq")).toBeInTheDocument();
+    expect(screen.getByText("API key configured")).toBeInTheDocument();
+    expect(screen.queryByText("Loaded models")).not.toBeInTheDocument();
+    expect(screen.queryByText("Missing models")).not.toBeInTheDocument();
+  });
+
+  it("renders Groq provider with API key not configured", () => {
+    const groqRuntime: RuntimeStatus = {
+      ...mockRuntime,
+      provider: "groq",
+      currentModel: null,
+      loadedModels: [],
+      ollamaAvailable: false,
+    };
+    const groqSetup: SetupStatus = {
+      ...mockSetup,
+      provider: "groq",
+      groqConfigured: false,
+    };
+    render(<ModelInfoModal runtime={groqRuntime} setup={groqSetup} onClose={() => {}} />);
+    expect(screen.getByText("API key not configured")).toBeInTheDocument();
+  });
+
+  it("renders Groq provider with API key not configured", () => {
+    const groqRuntime: RuntimeStatus = {
+      ...mockRuntime,
+      provider: "groq",
+      currentModel: null,
+      loadedModels: [],
+      ollamaAvailable: false,
+    };
+    const groqSetup: SetupStatus = {
+      ...mockSetup,
+      provider: "groq",
+      groqConfigured: false,
+    };
+    render(<ModelInfoModal runtime={groqRuntime} setup={groqSetup} onClose={() => {}} />);
+    expect(screen.getByText("API key not configured")).toBeInTheDocument();
   });
 });

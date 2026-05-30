@@ -212,6 +212,8 @@ pub struct RuntimeStatus {
     pub unified_memory: bool,
     pub system_ram_mib: u64,
     pub ollama_available: bool,
+    /// "ollama" or "groq"
+    pub provider: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -236,6 +238,8 @@ pub struct VenvProvisionStatus {
 #[serde(rename_all = "camelCase")]
 pub struct SetupStatus {
     pub is_ready: bool,
+    /// "ollama" or "groq"
+    pub provider: String,
     pub ollama_available: bool,
     pub required_models: Vec<String>,
     pub missing_models: Vec<String>,
@@ -250,6 +254,8 @@ pub struct SetupStatus {
     pub system_python_found: bool,
     pub venv_provision: VenvProvisionStatus,
     pub ffmpeg_available: bool,
+    /// Whether Groq API key is configured (only meaningful when provider=groq)
+    pub groq_configured: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -334,6 +340,7 @@ pub struct ScanContext {
     pub surya_script: std::path::PathBuf,
     pub model: String,
     pub pdfium_lib_path: std::path::PathBuf,
+    pub provider: crate::llm::Provider,
 }
 
 #[derive(Debug, Clone)]

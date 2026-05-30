@@ -666,7 +666,7 @@ fn classify_and_update(ctx: &ScanContext, file_id: i64, abs_path: &str) {
     let classification = if is_vid {
         classify::classify_video(
             abs,
-            &ctx.model,
+            &ctx.provider,
             &ctx.tmp_dir,
             &ctx.surya_venv_dir,
             &ctx.surya_script,
@@ -674,7 +674,7 @@ fn classify_and_update(ctx: &ScanContext, file_id: i64, abs_path: &str) {
     } else if is_pdf {
         classify::classify_pdf(
             abs,
-            &ctx.model,
+            &ctx.provider,
             &ctx.tmp_dir,
             &ctx.surya_venv_dir,
             &ctx.surya_script,
@@ -684,7 +684,7 @@ fn classify_and_update(ctx: &ScanContext, file_id: i64, abs_path: &str) {
     } else {
         classify::classify_image(
             abs,
-            &ctx.model,
+            &ctx.provider,
             &ctx.tmp_dir,
             &ctx.surya_venv_dir,
             &ctx.surya_script,
@@ -931,6 +931,9 @@ mod tests {
             surya_script: tmp.path().join("surya_ocr.py"),
             model: "qwen2.5vl:7b".to_string(),
             pdfium_lib_path: tmp.path().join("lib"),
+            provider: crate::llm::Provider::Ollama {
+                model: "qwen2.5vl:7b".to_string(),
+            },
         }
     }
 

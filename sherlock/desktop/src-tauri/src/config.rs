@@ -134,7 +134,14 @@ const SETTINGS_TEMPLATE: &str = r#"# Frank Sherlock runtime settings.
 #
 # Restart Frank Sherlock after changing this file.
 #
-# Ollama vision model override.
+# --- LLM Provider ---
+#
+# Which AI provider to use: "ollama" (local, default) or "groq" (Groq cloud API).
+provider = "ollama"
+#
+# --- Ollama settings ---
+#
+# Vision model override (only used when provider = "ollama").
 # Leave empty to let the app choose from detected hardware.
 #
 # Recommended options:
@@ -142,18 +149,26 @@ const SETTINGS_TEMPLATE: &str = r#"# Frank Sherlock runtime settings.
 # - qwen2.5vl:7b   Better quality when Ollama can load it fully on GPU.
 # - qwen2.5vl:32b  Heavy; only realistic for large unified-memory systems.
 #
-# Experimental alternatives may work if installed in Ollama, but prompts are tuned for qwen2.5vl:
-# - minicpm-v:8b
-# - moondream
-#
-# When set, Frank Sherlock requires this exact model. If it is missing, first-run setup will
-# offer to download it through Ollama before scanning.
 model_override = ""
+#
+# --- Groq settings ---
+#
+# Groq model name (only used when provider = "groq").
+# Default: "meta-llama/llama-4-scout-17b-16e-instruct"
+groq_model = "meta-llama/llama-4-scout-17b-16e-instruct"
+#
+# Groq API key. Can also be set via the GROQ_API_KEY environment variable
+# (which takes precedence over this file).
+# Get a key at: https://console.groq.com/keys
+groq_api_key = ""
 "#;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeSettings {
     pub model_override: Option<String>,
+    pub provider: Option<String>,
+    pub groq_api_key: Option<String>,
+    pub groq_model: Option<String>,
 }
 
 fn runtime_settings_path() -> AppResult<PathBuf> {
@@ -184,7 +199,10 @@ pub fn load_runtime_settings() -> AppResult<RuntimeSettings> {
 }
 
 fn parse_runtime_settings(data: &str) -> AppResult<RuntimeSettings> {
-    let mut model_override = None;
+    let mut model_override: Option<String> = None;
+    let mut provider: Option<String> = None;
+    let mut groq_api_key: Option<String> = None;
+    let mut groq_model: Option<String> = None;
 
     for raw_line in data.lines() {
         let line = raw_line.trim();
@@ -195,19 +213,67 @@ fn parse_runtime_settings(data: &str) -> AppResult<RuntimeSettings> {
         let Some((key, value)) = line.split_once('=') else {
             continue;
         };
-        if key.trim() != "model_override" {
-            continue;
-        }
-
+        let key = key.trim();
         let parsed = parse_settings_string(value.trim())?;
-        let parsed = parsed.trim();
-        if !parsed.is_empty() {
-            validate_model_tag(parsed)?;
-            model_override = Some(parsed.to_string());
+        let parsed = parsed.trim().to_string();
+
+        match key {
+            "model_override" => {
+                if !parsed.is_empty() {
+                    validate_model_tag(&parsed)?;
+                    model_override = Some(parsed);
+                }
+            }
+            "provider" => {
+                if !parsed.is_empty() {
+                    let lower = parsed.to_lowercase();
+                    if lower == "ollama" || lower == "groq" {
+                        provider = Some(lower);
+                    }
+                }
+            }
+            "groq_api_key" => {
+                if !parsed.is_empty() {
+                    groq_api_key = Some(parsed);
+                }
+            }
+            "groq_model" => {
+                if !parsed.is_empty() {
+                    groq_model = Some(parsed);
+                }
+            }
+            _ => {}
         }
     }
 
-    Ok(RuntimeSettings { model_override })
+    Ok(RuntimeSettings {
+        model_override,
+        provider,
+        groq_api_key,
+        groq_model,
+    })
+}
+
+/// Resolve the Groq API key: check GROQ_API_KEY env var first, then fall
+/// back to the settings file value. Returns None if neither is configured.
+pub fn resolve_groq_api_key(settings: &RuntimeSettings) -> Option<String> {
+    let key = std::env::var("GROQ_API_KEY")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            settings
+                .groq_api_key
+                .as_ref()
+                .filter(|k| !k.is_empty())
+                .cloned()
+        })?;
+    // Strip any surrounding double quotes (e.g. from `setx` on Windows)
+    Some(
+        key.trim_matches('"')
+            .trim_matches('\'')
+            .trim()
+            .to_string(),
+    )
 }
 
 fn parse_settings_string(value: &str) -> AppResult<String> {
@@ -387,7 +453,10 @@ mod tests {
         assert_eq!(
             settings,
             RuntimeSettings {
-                model_override: None
+                model_override: None,
+                provider: None,
+                groq_api_key: None,
+                groq_model: None,
             }
         );
     }

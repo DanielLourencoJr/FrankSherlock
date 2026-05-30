@@ -3,11 +3,65 @@ use std::time::Duration;
 
 use serde_json::Value;
 
+use super::groq::GroqResponse;
+use super::Provider;
+
 pub struct OllamaResponse {
     pub ok: bool,
     pub raw: String,
     #[allow(dead_code)]
     pub total_duration_s: f64,
+}
+
+pub struct LlmResponse {
+    pub ok: bool,
+    pub raw: String,
+}
+
+impl From<OllamaResponse> for LlmResponse {
+    fn from(r: OllamaResponse) -> Self {
+        LlmResponse {
+            ok: r.ok,
+            raw: r.raw,
+        }
+    }
+}
+
+impl From<GroqResponse> for LlmResponse {
+    fn from(r: GroqResponse) -> Self {
+        LlmResponse {
+            ok: r.ok,
+            raw: r.raw,
+        }
+    }
+}
+
+/// Generate a response using the configured provider.
+pub fn generate(
+    provider: &Provider,
+    prompt: &str,
+    image_path: Option<&Path>,
+    num_predict: u32,
+    timeout_secs: u64,
+    json_mode: bool,
+) -> LlmResponse {
+    match provider {
+        Provider::Ollama { model } => {
+            ollama_generate(model, prompt, image_path, num_predict, timeout_secs, json_mode).into()
+        }
+        Provider::Groq { model, api_key } => {
+            super::groq::groq_generate(
+                api_key,
+                model,
+                prompt,
+                image_path,
+                num_predict,
+                timeout_secs,
+                json_mode,
+            )
+            .into()
+        }
+    }
 }
 
 impl OllamaResponse {
