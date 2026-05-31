@@ -773,8 +773,8 @@ fn run_ocr(
     surya_script: &Path,
 ) -> OcrResult {
     match provider {
-        Provider::Groq { .. } => {
-            // Groq vision handles OCR natively — skip Surya
+        Provider::Groq { .. } | Provider::OpenRouter { .. } => {
+            // Cloud vision handles OCR natively — skip Surya
             run_llm_ocr(provider, image_path, tmp_dir)
         }
         Provider::Ollama { .. } => {

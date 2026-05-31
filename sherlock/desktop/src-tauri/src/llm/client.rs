@@ -4,6 +4,7 @@ use std::time::Duration;
 use serde_json::Value;
 
 use super::groq::GroqResponse;
+use super::openrouter::OpenRouterResponse;
 use super::Provider;
 
 pub struct OllamaResponse {
@@ -36,6 +37,15 @@ impl From<GroqResponse> for LlmResponse {
     }
 }
 
+impl From<OpenRouterResponse> for LlmResponse {
+    fn from(r: OpenRouterResponse) -> Self {
+        LlmResponse {
+            ok: r.ok,
+            raw: r.raw,
+        }
+    }
+}
+
 /// Generate a response using the configured provider.
 pub fn generate(
     provider: &Provider,
@@ -51,6 +61,18 @@ pub fn generate(
         }
         Provider::Groq { model, api_key } => {
             super::groq::groq_generate(
+                api_key,
+                model,
+                prompt,
+                image_path,
+                num_predict,
+                timeout_secs,
+                json_mode,
+            )
+            .into()
+        }
+        Provider::OpenRouter { model, api_key } => {
+            super::openrouter::openrouter_generate(
                 api_key,
                 model,
                 prompt,

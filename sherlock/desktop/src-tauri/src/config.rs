@@ -136,7 +136,10 @@ const SETTINGS_TEMPLATE: &str = r#"# Frank Sherlock runtime settings.
 #
 # --- LLM Provider ---
 #
-# Which AI provider to use: "ollama" (local, default) or "groq" (Groq cloud API).
+# Which AI provider to use:
+# - "ollama" (local, default)
+# - "groq" (Groq cloud API)
+# - "openrouter" (OpenRouter cloud API)
 provider = "ollama"
 #
 # --- Ollama settings ---
@@ -161,6 +164,17 @@ groq_model = "meta-llama/llama-4-scout-17b-16e-instruct"
 # (which takes precedence over this file).
 # Get a key at: https://console.groq.com/keys
 groq_api_key = ""
+#
+# --- OpenRouter settings ---
+#
+# OpenRouter model name (only used when provider = "openrouter").
+# Default: "google/gemma-4-31b-it:free"
+openrouter_model = "google/gemma-4-31b-it:free"
+#
+# OpenRouter API key. Can also be set via the OPENROUTER_API_KEY environment
+# variable (which takes precedence over this file).
+# Get a key at: https://openrouter.ai/keys
+openrouter_api_key = ""
 "#;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -169,6 +183,8 @@ pub struct RuntimeSettings {
     pub provider: Option<String>,
     pub groq_api_key: Option<String>,
     pub groq_model: Option<String>,
+    pub openrouter_api_key: Option<String>,
+    pub openrouter_model: Option<String>,
 }
 
 fn runtime_settings_path() -> AppResult<PathBuf> {
@@ -203,6 +219,8 @@ fn parse_runtime_settings(data: &str) -> AppResult<RuntimeSettings> {
     let mut provider: Option<String> = None;
     let mut groq_api_key: Option<String> = None;
     let mut groq_model: Option<String> = None;
+    let mut openrouter_api_key: Option<String> = None;
+    let mut openrouter_model: Option<String> = None;
 
     for raw_line in data.lines() {
         let line = raw_line.trim();
@@ -227,7 +245,7 @@ fn parse_runtime_settings(data: &str) -> AppResult<RuntimeSettings> {
             "provider" => {
                 if !parsed.is_empty() {
                     let lower = parsed.to_lowercase();
-                    if lower == "ollama" || lower == "groq" {
+                    if lower == "ollama" || lower == "groq" || lower == "openrouter" {
                         provider = Some(lower);
                     }
                 }
@@ -242,6 +260,16 @@ fn parse_runtime_settings(data: &str) -> AppResult<RuntimeSettings> {
                     groq_model = Some(parsed);
                 }
             }
+            "openrouter_api_key" => {
+                if !parsed.is_empty() {
+                    openrouter_api_key = Some(parsed);
+                }
+            }
+            "openrouter_model" => {
+                if !parsed.is_empty() {
+                    openrouter_model = Some(parsed);
+                }
+            }
             _ => {}
         }
     }
@@ -251,6 +279,8 @@ fn parse_runtime_settings(data: &str) -> AppResult<RuntimeSettings> {
         provider,
         groq_api_key,
         groq_model,
+        openrouter_api_key,
+        openrouter_model,
     })
 }
 
@@ -268,6 +298,28 @@ pub fn resolve_groq_api_key(settings: &RuntimeSettings) -> Option<String> {
                 .cloned()
         })?;
     // Strip any surrounding double quotes (e.g. from `setx` on Windows)
+    Some(
+        key.trim_matches('"')
+            .trim_matches('\'')
+            .trim()
+            .to_string(),
+    )
+}
+
+/// Resolve the OpenRouter API key: check OPENROUTER_API_KEY env var first,
+/// then fall back to the settings file value. Returns None if neither is
+/// configured.
+pub fn resolve_openrouter_api_key(settings: &RuntimeSettings) -> Option<String> {
+    let key = std::env::var("OPENROUTER_API_KEY")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            settings
+                .openrouter_api_key
+                .as_ref()
+                .filter(|k| !k.is_empty())
+                .cloned()
+        })?;
     Some(
         key.trim_matches('"')
             .trim_matches('\'')
@@ -457,6 +509,8 @@ mod tests {
                 provider: None,
                 groq_api_key: None,
                 groq_model: None,
+                openrouter_api_key: None,
+                openrouter_model: None,
             }
         );
     }

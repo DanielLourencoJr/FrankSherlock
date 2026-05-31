@@ -8,30 +8,55 @@ pub fn gather_runtime_status(gpu: &GpuInfo) -> RuntimeStatus {
         .and_then(|s| s.provider.as_deref())
         .unwrap_or("ollama");
 
-    let (ollama_available, loaded_models, current_model) = if provider_name == "groq" {
-        let groq_api_key = settings
-            .as_ref()
-            .and_then(crate::config::resolve_groq_api_key);
-        let model = settings
-            .as_ref()
-            .and_then(|s| s.groq_model.as_deref())
-            .unwrap_or(crate::llm::GROQ_DEFAULT_MODEL);
-        let configured = groq_api_key
-            .as_ref()
-            .map(|k| crate::llm::is_api_key_configured(k))
-            .unwrap_or(false);
-        (
-            false,
-            Vec::new(),
-            if configured {
-                Some(model.to_string())
-            } else {
-                None
-            },
-        )
-    } else {
-        let (available, loaded) = crate::llm::list_loaded_models();
-        (available, loaded.clone(), loaded.first().cloned())
+    let (ollama_available, loaded_models, current_model) = match provider_name {
+        "groq" => {
+            let groq_api_key = settings
+                .as_ref()
+                .and_then(crate::config::resolve_groq_api_key);
+            let model = settings
+                .as_ref()
+                .and_then(|s| s.groq_model.as_deref())
+                .unwrap_or(crate::llm::GROQ_DEFAULT_MODEL);
+            let configured = groq_api_key
+                .as_ref()
+                .map(|k| crate::llm::is_groq_key_configured(k))
+                .unwrap_or(false);
+            (
+                false,
+                Vec::new(),
+                if configured {
+                    Some(model.to_string())
+                } else {
+                    None
+                },
+            )
+        }
+        "openrouter" => {
+            let api_key = settings
+                .as_ref()
+                .and_then(crate::config::resolve_openrouter_api_key);
+            let model = settings
+                .as_ref()
+                .and_then(|s| s.openrouter_model.as_deref())
+                .unwrap_or(crate::llm::OPENROUTER_DEFAULT_MODEL);
+            let configured = api_key
+                .as_ref()
+                .map(|k| crate::llm::is_openrouter_key_configured(k))
+                .unwrap_or(false);
+            (
+                false,
+                Vec::new(),
+                if configured {
+                    Some(model.to_string())
+                } else {
+                    None
+                },
+            )
+        }
+        _ => {
+            let (available, loaded) = crate::llm::list_loaded_models();
+            (available, loaded.clone(), loaded.first().cloned())
+        }
     };
 
     RuntimeStatus {

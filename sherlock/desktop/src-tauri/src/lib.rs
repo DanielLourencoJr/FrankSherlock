@@ -59,7 +59,7 @@ fn select_llm_config(gpu: &platform::gpu::GpuInfo) -> (llm::Provider, ModelSelec
                         .unwrap_or_else(|| llm::GROQ_DEFAULT_MODEL.to_string());
                     let api_key = config::resolve_groq_api_key(&settings)
                         .unwrap_or_default();
-                    let configured = llm::is_api_key_configured(&api_key);
+                    let configured = llm::is_groq_key_configured(&api_key);
 
                     let provider = llm::Provider::Groq {
                         model: model.clone(),
@@ -74,6 +74,35 @@ fn select_llm_config(gpu: &platform::gpu::GpuInfo) -> (llm::Provider, ModelSelec
                             "Using Groq cloud API".to_string()
                         } else {
                             "Groq API key not configured — set GROQ_API_KEY env var or groq_api_key in settings.toml".to_string()
+                        },
+                        exact_required: false,
+                        settings_error: None,
+                    };
+
+                    (provider, selection)
+                }
+                "openrouter" => {
+                    let model = settings
+                        .openrouter_model
+                        .clone()
+                        .unwrap_or_else(|| llm::OPENROUTER_DEFAULT_MODEL.to_string());
+                    let api_key = config::resolve_openrouter_api_key(&settings)
+                        .unwrap_or_default();
+                    let configured = llm::is_openrouter_key_configured(&api_key);
+
+                    let provider = llm::Provider::OpenRouter {
+                        model: model.clone(),
+                        api_key,
+                    };
+
+                    let selection = ModelSelection {
+                        required_model: model.clone(),
+                        scan_model: model,
+                        tier: "cloud".to_string(),
+                        reason: if configured {
+                            "Using OpenRouter cloud API".to_string()
+                        } else {
+                            "OpenRouter API key not configured — set OPENROUTER_API_KEY env var or openrouter_api_key in settings.toml".to_string()
                         },
                         exact_required: false,
                         settings_error: None,
@@ -1490,12 +1519,13 @@ fn compute_setup_status(app_state: &AppState) -> SetupStatus {
     let (provider, model_selection) = select_llm_config(gpu);
     let provider_name = provider.name().to_string();
     let is_groq = matches!(provider, llm::Provider::Groq { .. });
+    let is_openrouter = matches!(provider, llm::Provider::OpenRouter { .. });
 
     let required_models = vec![model_selection.required_model.clone()];
     let python_status = platform::python::check_python_available(&app_state.paths.surya_venv_dir);
     let os = platform::current_os();
 
-    let (ollama_available, missing_models, _download_ready) = if is_groq {
+    let (ollama_available, missing_models, _download_ready) = if is_groq || is_openrouter {
         (false, Vec::new(), false)
     } else {
         let installed = llm::list_installed_models();
@@ -1519,13 +1549,15 @@ fn compute_setup_status(app_state: &AppState) -> SetupStatus {
     };
 
     let mut instructions: Vec<String> = if is_groq {
-        let key_configured = llm::is_api_key_configured(
+        let key_configured = llm::is_groq_key_configured(
             &config::resolve_groq_api_key(
                 &config::load_runtime_settings().unwrap_or(config::RuntimeSettings {
                     model_override: None,
                     provider: Some("groq".to_string()),
                     groq_api_key: None,
                     groq_model: None,
+                    openrouter_api_key: None,
+                    openrouter_model: None,
                 }),
             )
             .unwrap_or_default(),
@@ -1539,6 +1571,30 @@ fn compute_setup_status(app_state: &AppState) -> SetupStatus {
             ]
         } else {
             vec!["Setup complete — using Groq API.".to_string()]
+        }
+    } else if is_openrouter {
+        let key_configured = llm::is_openrouter_key_configured(
+            &config::resolve_openrouter_api_key(
+                &config::load_runtime_settings().unwrap_or(config::RuntimeSettings {
+                    model_override: None,
+                    provider: Some("openrouter".to_string()),
+                    groq_api_key: None,
+                    groq_model: None,
+                    openrouter_api_key: None,
+                    openrouter_model: None,
+                }),
+            )
+            .unwrap_or_default(),
+        );
+        if !key_configured {
+            vec![
+                "OpenRouter API key not configured.".to_string(),
+                "Set OPENROUTER_API_KEY environment variable or add openrouter_api_key to settings.toml.".to_string(),
+                "Get a key at: https://openrouter.ai/keys".to_string(),
+                "Then click 'Recheck' above.".to_string(),
+            ]
+        } else {
+            vec!["Setup complete — using OpenRouter API.".to_string()]
         }
     } else {
         let mut steps: Vec<String> = if !ollama_available {
@@ -1638,13 +1694,30 @@ fn compute_setup_status(app_state: &AppState) -> SetupStatus {
     }
 
     let is_ready = if is_groq {
-        let key_configured = llm::is_api_key_configured(
+        let key_configured = llm::is_groq_key_configured(
             &config::resolve_groq_api_key(
                 &config::load_runtime_settings().unwrap_or(config::RuntimeSettings {
                     model_override: None,
                     provider: Some("groq".to_string()),
                     groq_api_key: None,
                     groq_model: None,
+                    openrouter_api_key: None,
+                    openrouter_model: None,
+                }),
+            )
+            .unwrap_or_default(),
+        );
+        key_configured
+    } else if is_openrouter {
+        let key_configured = llm::is_openrouter_key_configured(
+            &config::resolve_openrouter_api_key(
+                &config::load_runtime_settings().unwrap_or(config::RuntimeSettings {
+                    model_override: None,
+                    provider: Some("openrouter".to_string()),
+                    groq_api_key: None,
+                    groq_model: None,
+                    openrouter_api_key: None,
+                    openrouter_model: None,
                 }),
             )
             .unwrap_or_default(),
@@ -1655,13 +1728,15 @@ fn compute_setup_status(app_state: &AppState) -> SetupStatus {
     };
 
     let groq_configured = if is_groq {
-        llm::is_api_key_configured(
+        llm::is_groq_key_configured(
             &config::resolve_groq_api_key(
                 &config::load_runtime_settings().unwrap_or(config::RuntimeSettings {
                     model_override: None,
                     provider: Some("groq".to_string()),
                     groq_api_key: None,
                     groq_model: None,
+                    openrouter_api_key: None,
+                    openrouter_model: None,
                 }),
             )
             .unwrap_or_default(),
@@ -1669,6 +1744,7 @@ fn compute_setup_status(app_state: &AppState) -> SetupStatus {
     } else {
         false
     };
+
 
     SetupStatus {
         is_ready,
