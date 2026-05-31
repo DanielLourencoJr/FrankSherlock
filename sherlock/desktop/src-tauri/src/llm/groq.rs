@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-pub const GROQ_DEFAULT_MODEL: &str = "meta-llama/llama-4-maverick-17b-128e-instruct";
+pub const GROQ_DEFAULT_MODEL: &str = "meta-llama/llama-4-scout-17b-16e-instruct";
 pub const GROQ_BASE: &str = "https://api.groq.com/openai/v1";
 
 /// Maximum image payload size Groq accepts (4 MB).

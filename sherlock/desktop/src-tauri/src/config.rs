@@ -154,8 +154,8 @@ model_override = ""
 # --- Groq settings ---
 #
 # Groq model name (only used when provider = "groq").
-# Default: "meta-llama/llama-4-maverick-17b-128e-instruct"
-groq_model = "meta-llama/llama-4-maverick-17b-128e-instruct"
+# Default: "meta-llama/llama-4-scout-17b-16e-instruct"
+groq_model = "meta-llama/llama-4-scout-17b-16e-instruct"
 #
 # Groq API key. Can also be set via the GROQ_API_KEY environment variable
 # (which takes precedence over this file).
