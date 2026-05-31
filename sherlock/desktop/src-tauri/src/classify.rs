@@ -14,46 +14,41 @@ use crate::models::ClassificationResult;
 // ---------------------------------------------------------------------------
 
 const PRIMARY_PROMPT: &str = concat!(
-    "Analyze this image and respond ONLY with valid JSON. Schema: ",
-    r#"{"media_type":"screenshot|anime|manga|photo|document|artwork|other","#,
-    r#""contains_text":true,"#,
-    r#""is_anime_related":false,"#,
-    r#""is_document_like":false,"#,
-    r#""description":"short factual description","#,
-    r#""series_candidates":["name"],"#,
-    r#""character_candidates":["name"],"#,
+    "Classify this image. Return ONLY valid JSON with these fields:\n",
+    r#"{"media_type":"(anime|manga|photo|screenshot|document|artwork|other)","#,
+    r#""contains_text":true|false,"#,
+    r#""description":"specific description under 12 words","#,
     r#""confidence":0.0}"#,
-    " Rules: ",
-    "1) Use null-like empty arrays when unknown. ",
-    "2) If image has visible text (UI, receipt, scan, subtitles), contains_text=true. ",
-    "3) is_document_like=true for receipts/invoices/forms/scanned docs/screenshots of documents. ",
-    "4) series_candidates and character_candidates must be unique and max 5 items each. ",
-    "5) Keep description under 24 words. ",
-    "6) Favor precision over guesswork.",
+    "\nRules: ",
+    "media_type is the image category. ",
+    "contains_text=true if any visible text (UI, receipt, subtitles, signs). ",
+    "description: be specific, not generic — name the subject, setting, or style. ",
+    "confidence: 0.0-1.0 how sure you are. ",
 );
 
 const PRIMARY_PROMPT_FALLBACK: &str = concat!(
-    "Return ONLY valid compact JSON with schema: ",
-    r#"{"media_type":"screenshot|anime|manga|photo|document|artwork|other","#,
-    r#""contains_text":true,"#,
-    r#""is_anime_related":false,"#,
-    r#""is_document_like":false,"#,
-    r#""description":"max 24 words","#,
-    r#""series_candidates":["max 3 unique names"],"#,
-    r#""character_candidates":["max 3 unique names"],"#,
+    "Return ONLY valid JSON. Fields:\n",
+    r#"{"media_type":"anime|manga|photo|screenshot|document|artwork|other","#,
+    r#""contains_text":true|false,"#,
+    r#""description":"max 12 words","#,
     r#""confidence":0.0}"#,
-    " Never exceed 3 items in candidates arrays. Never repeat entries. No markdown.",
+    " No markdown. Be specific in description.",
 );
 
 const ANIME_PROMPT: &str = concat!(
-    "This appears anime/manga-related. Return ONLY valid JSON with schema: ",
-    r#"{"series":"name or null","#,
-    r#""franchise":"name or null","#,
-    r#""characters":[{"name":"full canonical name","series":"name or null","confidence":0.0}],"#,
-    r#""canonical_mentions":["Name from Series"],"#,
-    r#""scene_summary":"short","#,
+    "Identify this anime/manga image. Return ONLY valid JSON with schema:\n",
+    r#"{"series":"canonical series name or null","#,
+    r#""franchise":"franchise name or null","#,
+    r#""characters":[{"name":"full canonical name","confidence":0.0}],"#,
+    r#""scene_summary":"short description","#,
     r#""confidence":0.0}"#,
-    " Rules: prefer canonical full names when possible; if unknown set null/empty.",
+    "\nExamples:\n",
+    r##"{"series":"Chainsaw Man","characters":[{"name":"Denji","confidence":0.95},{"name":"Pochita","confidence":0.8}],"scene_summary":"Boy with chainsaw arms fighting a demon","confidence":0.9}"##,
+    "\n",
+    r##"{"series":"Youjo Senki","characters":[{"name":"Tanya Degurechaff","confidence":0.9}],"scene_summary":"Blonde girl in military uniform casting magic","confidence":0.85}"##,
+    "\n",
+    r##"{"series":"Shuumatsu no Valkyrie","characters":[{"name":"Lü Bu","confidence":0.8}],"scene_summary":"Two warriors fighting in a divine arena","confidence":0.75}"##,
+    "\nNow identify this image: use exact canonical names, null if unknown.",
 );
 
 const OCR_PROMPT: &str =
@@ -88,8 +83,7 @@ const VALID_MEDIA_TYPES: &[&str] = &[
 
 
 /// Check whether a parsed JSON result is the model echoing back the schema
-/// template instead of providing real analysis. Smaller models sometimes
-/// copy placeholder values like `"name"` or the pipe-delimited enum literal.
+/// template instead of providing real analysis.
 fn is_schema_echo(value: &Value) -> bool {
     // media_type containing a pipe means the model echoed the enum literal
     if let Some(mt) = value.get("media_type").and_then(|v| v.as_str()) {
@@ -97,8 +91,7 @@ fn is_schema_echo(value: &Value) -> bool {
             return true;
         }
     }
-    // description being empty + confidence 0 + candidates containing "name"
-    // is a strong signal the model just returned the template
+    // description empty + confidence 0 = model returned placeholder values
     let desc_empty = value
         .get("description")
         .and_then(|v| v.as_str())
@@ -109,20 +102,7 @@ fn is_schema_echo(value: &Value) -> bool {
         .and_then(|v| v.as_f64())
         .unwrap_or(0.0)
         == 0.0;
-    if !desc_empty || !conf_zero {
-        return false;
-    }
-    // Check if series_candidates or character_candidates contain "name"
-    // (the schema placeholder)
-    let has_name_placeholder = |key: &str| -> bool {
-        value
-            .get(key)
-            .and_then(|v| v.as_array())
-            .map(|arr| arr.iter().any(|x| x.as_str() == Some("name")))
-            .unwrap_or(false)
-    };
-    has_name_placeholder("series_candidates")
-        || has_name_placeholder("character_candidates")
+    desc_empty && conf_zero
 }
 
 /// Regex-based salvage when all JSON attempts fail.
@@ -265,7 +245,15 @@ pub fn should_run_anime_enrichment(primary: &Value) -> bool {
         .get("is_anime_related")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
-    matches!(media_type, "anime" | "manga" | "artwork") || is_anime
+    let confidence = primary
+        .get("confidence")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+    // Explicitly tagged as anime
+    matches!(media_type, "anime" | "manga" | "artwork")
+        || is_anime
+        // Low-confidence "photo" or "other" might be misclassified anime art
+        || (confidence < 0.6 && matches!(media_type, "photo" | "other"))
 }
 
 pub fn should_run_document_enrichment(primary: &Value) -> bool {
@@ -548,6 +536,26 @@ fn is_simple_model(model: &str) -> bool {
     SIMPLE_ONLY_MODELS.iter().any(|m| lower.contains(m))
 }
 
+/// Quick yes/no check: is this image anime or manga related?
+/// Uses a minimal prompt (low token cost) to catch cases the primary
+/// classifier missed.
+fn classify_is_anime(provider: &Provider, image_path: &Path, tmp_dir: &Path) -> bool {
+    let effective_path = first_frame_if_gif(image_path, tmp_dir);
+    let resp = generate(
+        provider,
+        "Is this image anime or manga style? Answer ONLY YES or NO.",
+        Some(&effective_path),
+        10,
+        30,
+        false,
+    );
+    if !resp.ok {
+        return false;
+    }
+    let answer = resp.raw.trim().to_uppercase();
+    answer.starts_with("Y") || answer.contains("YES")
+}
+
 fn classify_primary(provider: &Provider, image_path: &Path, tmp_dir: &Path) -> Value {
     let effective_path = first_frame_if_gif(image_path, tmp_dir);
 
@@ -643,11 +651,7 @@ fn safe_default_primary() -> Value {
     serde_json::json!({
         "media_type": "other",
         "contains_text": false,
-        "is_anime_related": false,
-        "is_document_like": false,
         "description": "",
-        "series_candidates": [],
-        "character_candidates": [],
         "confidence": 0.0,
     })
 }
@@ -919,15 +923,13 @@ pub fn classify_image(
     let mut extracted_text = String::new();
     let mut canonical_mentions = String::new();
 
-    // Anime enrichment
-    if should_run_anime_enrichment(&primary) {
+    // Anime enrichment — also run a quick secondary check if primary missed it
+    let should_run = should_run_anime_enrichment(&primary)
+        || classify_is_anime(provider, image_path, tmp_dir);
+    if should_run {
         if let Some(anime) = classify_anime_details(provider, image_path, tmp_dir) {
             if let Some(series) = anime.get("series").and_then(clean_nullable_str) {
                 full_description = format!("{full_description} [Series: {series}]");
-            }
-            let mentions = normalize_list(anime.get("canonical_mentions").unwrap_or(&Value::Null));
-            if !mentions.is_empty() {
-                canonical_mentions = mentions.join(", ");
             }
             if let Some(chars) = anime.get("characters").and_then(|v| v.as_array()) {
                 let char_names: Vec<String> = chars
@@ -938,27 +940,12 @@ pub fn classify_image(
                             .map(|s| s.to_string())
                     })
                     .collect();
-                if !char_names.is_empty() && canonical_mentions.is_empty() {
+                if !char_names.is_empty() {
                     canonical_mentions = char_names.join(", ");
                 }
             }
         }
     }
-
-    // Also add series/character candidates from primary to canonical_mentions
-    let series_cands = normalize_list(primary.get("series_candidates").unwrap_or(&Value::Null));
-    let char_cands = normalize_list(primary.get("character_candidates").unwrap_or(&Value::Null));
-    let mut all_mentions: Vec<String> = Vec::new();
-    if !canonical_mentions.is_empty() {
-        all_mentions.extend(canonical_mentions.split(", ").map(|s| s.to_string()));
-    }
-    for c in series_cands.iter().chain(char_cands.iter()) {
-        let lower = c.to_lowercase();
-        if !all_mentions.iter().any(|m| m.to_lowercase() == lower) {
-            all_mentions.push(c.clone());
-        }
-    }
-    canonical_mentions = all_mentions.join(", ");
 
     // Document enrichment
     if should_run_document_enrichment(&primary) {
@@ -1436,19 +1423,19 @@ mod tests {
 
     #[test]
     fn is_schema_echo_rejects_valid_result() {
-        let v = serde_json::json!({"media_type":"photo","description":"A cat","confidence":0.9,"series_candidates":[],"character_candidates":[]});
+        let v = serde_json::json!({"media_type":"photo","description":"A cat","confidence":0.9});
         assert!(!is_schema_echo(&v));
     }
 
     #[test]
-    fn is_schema_echo_detects_placeholder_name() {
-        let v = serde_json::json!({"media_type":"other","description":"","confidence":0.0,"series_candidates":["name"],"character_candidates":[]});
+    fn is_schema_echo_detects_empty_desc_zero_conf() {
+        let v = serde_json::json!({"media_type":"other","description":"","confidence":0.0});
         assert!(is_schema_echo(&v));
     }
 
     #[test]
     fn is_schema_echo_detects_non_empty_desc_as_not_echo() {
-        let v = serde_json::json!({"media_type":"photo","description":"A cat","confidence":0.0,"series_candidates":[],"character_candidates":[]});
+        let v = serde_json::json!({"media_type":"photo","description":"A cat","confidence":0.0});
         assert!(!is_schema_echo(&v));
     }
 
@@ -1533,9 +1520,15 @@ mod tests {
     }
 
     #[test]
-    fn should_not_run_anime_for_photo() {
-        let p = serde_json::json!({"media_type": "photo", "is_anime_related": false});
+    fn should_not_run_anime_for_high_conf_photo() {
+        let p = serde_json::json!({"media_type": "photo", "confidence": 0.9});
         assert!(!should_run_anime_enrichment(&p));
+    }
+
+    #[test]
+    fn should_run_anime_for_low_conf_photo() {
+        let p = serde_json::json!({"media_type": "photo", "confidence": 0.3});
+        assert!(should_run_anime_enrichment(&p));
     }
 
     #[test]
