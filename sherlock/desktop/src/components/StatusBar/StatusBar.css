@@ -33,3 +33,13 @@
   opacity: 0.7;
   font-size: 0.7rem;
 }
+
+.statusbar-reset {
+  color: var(--danger);
+  margin-right: 8px;
+}
+
+.statusbar-reset:hover {
+  color: var(--danger) !important;
+  filter: brightness(1.3);
+}

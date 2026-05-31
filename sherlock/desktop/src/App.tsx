@@ -3,7 +3,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   cancelScan, copyFilesToClipboard, deleteFiles, ensureDatabase,
   getCliFolderPath, getFileMetadata, getFileProperties, listRoots,
-  removeRoot, renameFile, reorderRoots, startScan, updateFileMetadata,
+  removeRoot, renameFile, reorderRoots, resetDatabase, startScan, updateFileMetadata,
 } from "./api";
 import type {
   DbStats,
@@ -322,6 +322,23 @@ export default function App() {
   /* ── Handlers ── */
   function onWindowClose() {
     void getCurrentWindow().close();
+  }
+
+  async function handleResetDb() {
+    const sure = window.confirm(
+      "Reset database?\n\nThis will delete ALL data: indexed files, thumbnails, classifications, faces, albums, and settings. Original files on disk will not be touched.\n\nYou will need to re-scan your folders afterwards. Are you sure?",
+    );
+    if (!sure) return;
+
+    try {
+      const stats = await resetDatabase();
+      setDbStats(stats);
+      await scanManager.refreshRoots();
+      await runSearch(0, false);
+      setNotice("Database reset. Re-scan your folders to rebuild the index.");
+    } catch (err) {
+      setError(errorMessage(err));
+    }
   }
 
   async function onDeleteRoot(root: RootInfo) {
@@ -846,6 +863,7 @@ export default function App() {
         selectedCount={selectedIndices.size}
         faceProgress={faces.faceProgress}
         onShowModelInfo={() => setShowModelInfo(true)}
+        onResetDb={handleResetDb}
       />
 
       {/* ── Toasts ── */}

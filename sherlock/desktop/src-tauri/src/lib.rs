@@ -196,6 +196,34 @@ fn get_cli_folder_path(state: State<'_, AppState>) -> Option<String> {
 }
 
 #[tauri::command]
+fn reset_database(state: State<'_, AppState>) -> Result<models::DbStats, String> {
+    require_writable(state.inner())?;
+
+    // Delete cache directories so they get recreated fresh
+    let cache_dirs = [
+        &state.paths.thumbnails_dir,
+        &state.paths.classification_cache_dir,
+        &state.paths.face_crops_dir,
+    ];
+    for dir in cache_dirs {
+        if dir.exists() {
+            std::fs::remove_dir_all(dir)
+                .map_err(|e| format!("Failed to remove cache dir: {e}"))?;
+        }
+    }
+
+    // Recreate database (deletes db file + WAL + SHM, re-inits schema)
+    db::recreate_database(&state.paths.db_file).map_err(|e| e.to_string())?;
+
+    // Return fresh stats
+    let mut stats =
+        db::database_stats(&state.paths.db_file).map_err(|e| e.to_string())?;
+    stats.db_size_bytes = file_size_bytes(&state.paths.db_file);
+    stats.thumbs_size_bytes = dir_size_bytes(&state.paths.thumbnails_dir);
+    Ok(stats)
+}
+
+#[tauri::command]
 fn ensure_database(state: State<'_, AppState>) -> Result<models::DbStats, String> {
     let mut stats = if state.read_only {
         db::database_stats(&state.paths.db_file).map_err(|e| e.to_string())?
@@ -1917,6 +1945,7 @@ pub fn run() {
             get_app_paths,
             get_cli_folder_path,
             ensure_database,
+            reset_database,
             parse_query_nl,
             get_setup_status,
             start_setup_download,

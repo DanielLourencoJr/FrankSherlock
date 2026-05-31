@@ -10,9 +10,10 @@ type Props = {
   selectedCount: number;
   faceProgress: FaceDetectProgress | null;
   onShowModelInfo?: () => void;
+  onResetDb?: () => void;
 };
 
-export default function StatusBar({ runtime, isScanning, runningScansCount, selectedCount, faceProgress, onShowModelInfo }: Props) {
+export default function StatusBar({ runtime, isScanning, runningScansCount, selectedCount, faceProgress, onShowModelInfo, onResetDb }: Props) {
   return (
     <div className="statusbar">
       <span>
@@ -47,6 +48,18 @@ export default function StatusBar({ runtime, isScanning, runningScansCount, sele
         <span>{selectedCount} selected</span>
       )}
       <span className="spacer" />
+      {onResetDb && (
+        <span
+          className="statusbar-clickable statusbar-reset"
+          onClick={onResetDb}
+          title="Reset database — removes all data and caches"
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") onResetDb(); }}
+        >
+          Reset DB
+        </span>
+      )}
       <span className="statusbar-version">{__APP_VERSION__}</span>
     </div>
   );

@@ -41,6 +41,10 @@ export async function ensureDatabase(): Promise<DbStats> {
   return invoke<DbStats>("ensure_database");
 }
 
+export async function resetDatabase(): Promise<DbStats> {
+  return invoke<DbStats>("reset_database");
+}
+
 export async function searchImages(request: SearchRequest): Promise<SearchResponse> {
   return invoke<SearchResponse>("search_images", { request });
 }
