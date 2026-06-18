@@ -3,7 +3,8 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-pub const OPENROUTER_DEFAULT_MODEL: &str = "google/gemma-4-31b-it:free";
+/// NVIDIA Nemotron Nano 12B VL — free tier vision model on OpenRouter.
+pub const OPENROUTER_DEFAULT_MODEL: &str = "nvidia/nemotron-nano-12b-v2-vl:free";
 pub const OPENROUTER_BASE: &str = "https://openrouter.ai/api/v1";
 
 /// Maximum image payload size OpenRouter accepts (10 MB).
@@ -46,6 +47,7 @@ const MAX_RATE_LIMIT_RETRIES: u32 = 3;
 /// Call OpenRouter's OpenAI-compatible chat completions endpoint.
 /// Automatically retries on 429 rate-limit responses, sleeping for the
 /// `Retry-After` duration between attempts.
+#[allow(unused_variables)]
 pub fn openrouter_generate(
     api_key: &str,
     model: &str,
@@ -88,7 +90,7 @@ pub fn openrouter_generate(
         "text": prompt,
     }));
 
-    let mut payload = serde_json::json!({
+    let payload = serde_json::json!({
         "model": model,
         "messages": [{
             "role": "user",
@@ -99,9 +101,9 @@ pub fn openrouter_generate(
         "temperature": 0.3,
     });
 
-    if json_mode {
-        payload["response_format"] = serde_json::json!({"type": "json_object"});
-    }
+    // Note: response_format JSON mode causes validation failures with some
+    // models. We rely on prompt-level JSON instructions + parse_json_response()
+    // fallback instead.
 
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .http_status_as_error(false)

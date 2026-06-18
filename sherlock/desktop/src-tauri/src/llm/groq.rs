@@ -3,11 +3,11 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-pub const GROQ_DEFAULT_MODEL: &str = "meta-llama/llama-4-scout-17b-16e-instruct";
+pub const GROQ_DEFAULT_MODEL: &str = "qwen/qwen3.6-27b";
 pub const GROQ_BASE: &str = "https://api.groq.com/openai/v1";
 
-/// Maximum image payload size Groq accepts (4 MB).
-const MAX_IMAGE_BYTES: u64 = 4 * 1024 * 1024;
+/// Maximum image payload size Groq accepts for Qwen 3.6-27B (20 MB).
+const MAX_IMAGE_BYTES: u64 = 20 * 1024 * 1024;
 
 pub struct GroqResponse {
     pub ok: bool,
@@ -46,6 +46,7 @@ const MAX_RATE_LIMIT_RETRIES: u32 = 3;
 /// Call Groq's OpenAI-compatible chat completions endpoint.
 /// Automatically retries on 429 rate-limit responses, sleeping for the
 /// `Retry-After` duration between attempts.
+#[allow(unused_variables)]
 pub fn groq_generate(
     api_key: &str,
     model: &str,
@@ -68,7 +69,7 @@ pub fn groq_generate(
 
         if bytes.len() as u64 > MAX_IMAGE_BYTES {
             return GroqResponse::error(format!(
-                "image_too_large: {} bytes exceeds 4 MB limit",
+                "image_too_large: {} bytes exceeds 20 MB limit",
                 bytes.len()
             ));
         }
@@ -89,7 +90,7 @@ pub fn groq_generate(
         "text": prompt,
     }));
 
-    let mut payload = serde_json::json!({
+    let payload = serde_json::json!({
         "model": model,
         "messages": [{
             "role": "user",
@@ -100,9 +101,9 @@ pub fn groq_generate(
         "temperature": 0.3,
     });
 
-    if json_mode {
-        payload["response_format"] = serde_json::json!({"type": "json_object"});
-    }
+    // Note: Groq's response_format JSON mode is too strict and causes
+    // validation failures with Qwen 3.6-27B. We rely on prompt-level JSON
+    // instructions + parse_json_response() fallback instead.
 
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .http_status_as_error(false)
@@ -181,7 +182,7 @@ pub fn groq_generate(
             }
         } else if status == 413 {
             return GroqResponse::error(
-                "payload_too_large: image + request exceeds 4 MB limit".to_string(),
+                "payload_too_large: image + request exceeds 20 MB limit".to_string(),
             );
         } else {
             let msg = if let Ok(parsed) = serde_json::from_str::<Value>(&body) {

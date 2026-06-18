@@ -157,8 +157,8 @@ model_override = ""
 # --- Groq settings ---
 #
 # Groq model name (only used when provider = "groq").
-# Default: "meta-llama/llama-4-scout-17b-16e-instruct"
-groq_model = "meta-llama/llama-4-scout-17b-16e-instruct"
+# Default: "qwen/qwen3.6-27b"
+groq_model = "qwen/qwen3.6-27b"
 #
 # Groq API key. Can also be set via the GROQ_API_KEY environment variable
 # (which takes precedence over this file).
@@ -168,8 +168,8 @@ groq_api_key = ""
 # --- OpenRouter settings ---
 #
 # OpenRouter model name (only used when provider = "openrouter").
-# Default: "google/gemma-4-31b-it:free"
-openrouter_model = "google/gemma-4-31b-it:free"
+# Default: "nvidia/nemotron-nano-12b-v2-vl:free"
+openrouter_model = "nvidia/nemotron-nano-12b-v2-vl:free"
 #
 # OpenRouter API key. Can also be set via the OPENROUTER_API_KEY environment
 # variable (which takes precedence over this file).
