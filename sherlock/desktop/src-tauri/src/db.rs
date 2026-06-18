@@ -672,6 +672,31 @@ pub fn list_unclassified_files(
     Ok(out)
 }
 
+pub fn list_unclassified_by_root(
+    db_path: &Path,
+    root_id: i64,
+) -> AppResult<Vec<crate::models::UnclassifiedFileInfo>> {
+    let conn = open_conn(db_path)?;
+    let mut stmt = conn.prepare(
+        "SELECT id, rel_path, abs_path, thumb_path FROM files
+         WHERE root_id = ?1 AND confidence = 0.0 AND deleted_at IS NULL
+         ORDER BY rel_path",
+    )?;
+    let rows = stmt.query_map(params![root_id], |row| {
+        Ok(crate::models::UnclassifiedFileInfo {
+            id: row.get(0)?,
+            rel_path: row.get(1)?,
+            abs_path: row.get(2)?,
+            thumbnail_path: row.get(3)?,
+        })
+    })?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
 pub fn complete_scan_job_by_id(
     db_path: &Path,
     job_id: i64,

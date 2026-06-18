@@ -27,7 +27,7 @@ use models::{
     Album, DeleteFilesResult, DuplicatesResponse, HealthCheckOutcome, HealthStatus, PdfPassword,
     ProtectedPdfInfo, PurgeResult, RenameFileResult, RetryProtectedPdfsResult, RootInfo,
     RuntimeStatus, ScanJobStatus, SearchRequest, SearchResponse, SetupDownloadStatus, SetupStatus,
-    SmartFolder, SubdirEntry, VenvProvisionStatus,
+    SmartFolder, SubdirEntry, UnclassifiedFileInfo, VenvProvisionStatus,
 };
 use tauri::Manager;
 use tauri::State;
@@ -709,6 +709,35 @@ fn update_file_metadata(
         &extracted_text,
         &canonical_mentions,
         &location_text,
+    )
+    .map_err(|e| e.to_string())
+}
+
+// ── Manual Description ─────────────────────────────────────────────
+
+#[tauri::command]
+fn list_manual_files(root_id: i64, state: State<'_, AppState>) -> Result<Vec<UnclassifiedFileInfo>, String> {
+    db::list_unclassified_by_root(&state.paths.db_file, root_id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn save_manual_description(
+    file_id: i64,
+    description: String,
+    media_type: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    require_writable(state.inner())?;
+    db::update_file_classification(
+        &state.paths.db_file,
+        file_id,
+        &media_type,
+        &description,
+        "",
+        "",
+        1.0,
+        "unknown",
     )
     .map_err(|e| e.to_string())
 }
@@ -2043,6 +2072,8 @@ pub fn run() {
             get_file_metadata,
             get_file_properties,
             update_file_metadata,
+            list_manual_files,
+            save_manual_description,
             find_duplicates,
             create_album,
             delete_album,

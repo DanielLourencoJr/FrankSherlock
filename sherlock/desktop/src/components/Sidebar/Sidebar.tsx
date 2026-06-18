@@ -41,6 +41,7 @@ type SidebarProps = {
   onFindDuplicates?: () => void;
   onOpenPdfPasswords?: () => void;
   onOpenFaces?: () => void;
+  onOpenManualDescription?: () => void;
   updateInfo?: UpdateInfo | null;
   updateChecking?: boolean;
   updateDownloading?: boolean;
@@ -58,7 +59,7 @@ export default function Sidebar({
   onCancelScan, onResumeScan,
   onSelectAlbum, onDeleteAlbum, onSelectSmartFolder, onDeleteSmartFolder,
   onReorderRoots, onReorderAlbums, onReorderSmartFolders, onFindDuplicates,
-  onOpenPdfPasswords, onOpenFaces,
+  onOpenPdfPasswords, onOpenFaces, onOpenManualDescription,
   updateInfo, updateChecking, updateDownloading, updateProgress,
   onCheckUpdates, onInstallUpdate,
 }: SidebarProps) {
@@ -167,7 +168,7 @@ export default function Sidebar({
         )}
       </div>
 
-      {(onFindDuplicates || onOpenPdfPasswords || onOpenFaces || onCheckUpdates) && (
+      {(onFindDuplicates || onOpenPdfPasswords || onOpenFaces || onOpenManualDescription || onCheckUpdates) && (
         <div className="sidebar-tools-fixed">
           <div className="sidebar-section"><span>Tools</span></div>
           <div className="sidebar-tool-list">
@@ -189,6 +190,16 @@ export default function Sidebar({
                 title="Manage passwords for protected PDFs"
               >
                 PDF Passwords
+              </button>
+            )}
+            {onOpenManualDescription && (
+              <button
+                type="button"
+                className="sidebar-tool-btn"
+                onClick={onOpenManualDescription}
+                title="Manually describe images one by one for full-text search"
+              >
+                Manual Description
               </button>
             )}
             {onOpenFaces && (

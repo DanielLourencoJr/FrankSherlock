@@ -23,6 +23,7 @@ import Sidebar from "./components/Sidebar/Sidebar";
 import Content from "./components/Content/Content";
 import DuplicatesView from "./components/Content/DuplicatesView";
 import FacesView from "./components/Content/FacesView";
+import ManualDescriptionView from "./components/Content/ManualDescriptionView";
 import PdfPasswordsView from "./components/Content/PdfPasswordsView";
 import ContextMenu from "./components/Content/ContextMenu";
 import StatusBar from "./components/StatusBar/StatusBar";
@@ -84,8 +85,10 @@ export default function App() {
   const [facePreviewItems, setFacePreviewItems] = useState<SearchItem[]>([]);
   const [propertiesItem, setPropertiesItem] = useState<SearchItem | null>(null);
   const [forceShowSetup, setForceShowSetup] = useState(false);
+  const [setupDismissed, setSetupDismissed] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [pdfPasswordsMode, setPdfPasswordsMode] = useState(false);
+  const [manualDescriptionMode, setManualDescriptionMode] = useState(false);
 
   /* ── Directory tree: derived from query ── */
   const selectedSubdir = useMemo(() => {
@@ -285,6 +288,7 @@ export default function App() {
   }, [query]);
 
   const subtitle = useMemo(() => {
+    if (manualDescriptionMode) return "Manual Description";
     if (faces.facesMode) return "Faces";
     if (pdfPasswordsMode) return "PDF Passwords";
     if (duplicates.duplicatesMode) return "Find Duplicates";
@@ -298,12 +302,13 @@ export default function App() {
       }
     }
     return null;
-  }, [faces.facesMode, duplicates.duplicatesMode, activeAlbumName, smartFolderManager.activeSmartFolderId, smartFolderManager.smartFolders, selectedRootId, roots, selectedSubdir, pdfPasswordsMode]);
+  }, [manualDescriptionMode, faces.facesMode, duplicates.duplicatesMode, activeAlbumName, smartFolderManager.activeSmartFolderId, smartFolderManager.smartFolders, selectedRootId, roots, selectedSubdir, pdfPasswordsMode]);
 
   /* ── Mode switching coordination ── */
   function enterDuplicatesMode(threshold?: number | null) {
     setPdfPasswordsMode(false);
     faces.setFacesMode(false);
+    setManualDescriptionMode(false);
     duplicates.onFindDuplicates(threshold);
   }
 
@@ -311,12 +316,21 @@ export default function App() {
     faces.setFacesMode(true);
     duplicates.setDuplicatesMode(false);
     setPdfPasswordsMode(false);
+    setManualDescriptionMode(false);
   }
 
   function enterPdfPasswordsMode() {
     setPdfPasswordsMode(true);
     duplicates.setDuplicatesMode(false);
     faces.setFacesMode(false);
+    setManualDescriptionMode(false);
+  }
+
+  function enterManualDescriptionMode() {
+    setManualDescriptionMode(true);
+    duplicates.setDuplicatesMode(false);
+    faces.setFacesMode(false);
+    setPdfPasswordsMode(false);
   }
 
   /* ── Handlers ── */
@@ -573,8 +587,8 @@ export default function App() {
   return (
     <div className="app-shell">
       {/* ── Modals ── */}
-      {setup && (!setup.isReady || forceShowSetup) && (
-        <SetupModal setup={setup} onRecheck={scanManager.onRecheckSetup} onDownload={scanManager.onSetupDownload} onSetupOcr={scanManager.onSetupOcr} onClose={forceShowSetup ? () => setForceShowSetup(false) : undefined} />
+      {setup && (!setup.isReady && !setupDismissed || forceShowSetup) && (
+        <SetupModal setup={setup} onRecheck={scanManager.onRecheckSetup} onDownload={scanManager.onSetupDownload} onSetupOcr={scanManager.onSetupOcr} onClose={() => { setSetupDismissed(true); setForceShowSetup(false); }} />
       )}
       {showResumeModal && (
         <ResumeModal
@@ -760,6 +774,7 @@ export default function App() {
           onFindDuplicates={enterDuplicatesMode}
           onOpenPdfPasswords={enterPdfPasswordsMode}
           onOpenFaces={enterFacesMode}
+          onOpenManualDescription={enterManualDescriptionMode}
           updateInfo={autoUpdate.updateInfo}
           updateChecking={autoUpdate.updateChecking}
           updateDownloading={autoUpdate.updateDownloading}
@@ -768,7 +783,13 @@ export default function App() {
           onInstallUpdate={autoUpdate.installUpdate}
         />
 
-        {faces.facesMode ? (
+        {manualDescriptionMode ? (
+          <ManualDescriptionView
+            onBack={() => setManualDescriptionMode(false)}
+            onNotice={setNotice}
+            onError={setError}
+          />
+        ) : faces.facesMode ? (
           <FacesView
             onBack={() => faces.setFacesMode(false)}
             onSelectPerson={(personId, personName) => {

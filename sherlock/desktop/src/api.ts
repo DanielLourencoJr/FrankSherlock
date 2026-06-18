@@ -26,6 +26,7 @@ import type {
   SubdirEntry,
   SearchRequest,
   SearchResponse,
+  UnclassifiedFileInfo,
   VenvProvisionStatus,
 } from "./types";
 
@@ -216,6 +217,20 @@ export async function retryProtectedPdfs(): Promise<RetryProtectedPdfsResult> {
 
 export async function reclassifyPdf(fileId: number): Promise<boolean> {
   return invoke<boolean>("reclassify_pdf", { fileId });
+}
+
+// ── Manual Description ──────────────────────────────────────────────
+
+export async function listManualFiles(rootId: number): Promise<UnclassifiedFileInfo[]> {
+  return invoke<UnclassifiedFileInfo[]>("list_manual_files", { rootId });
+}
+
+export async function saveManualDescription(
+  fileId: number,
+  description: string,
+  mediaType: string,
+): Promise<void> {
+  return invoke<void>("save_manual_description", { fileId, description, mediaType });
 }
 
 // ── Video ───────────────────────────────────────────────────────────

@@ -202,6 +202,15 @@ pub struct UnclassifiedFile {
 
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct UnclassifiedFileInfo {
+    pub id: i64,
+    pub rel_path: String,
+    pub abs_path: String,
+    pub thumbnail_path: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RuntimeStatus {
     pub os: crate::platform::OsKind,
     pub current_model: Option<String>,

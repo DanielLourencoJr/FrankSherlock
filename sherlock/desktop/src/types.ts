@@ -249,6 +249,13 @@ export type SubdirEntry = {
   fileCount: number;
 };
 
+export type UnclassifiedFileInfo = {
+  id: number;
+  relPath: string;
+  absPath: string;
+  thumbnailPath: string | null;
+};
+
 export type UpdateInfo = {
   version: string;
   body: string | null;

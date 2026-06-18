@@ -1,0 +1,176 @@
+/* ── Manual Description View ────────────────────────────────
+   Uses shared-tool-view.css for base layout (.tool-view, etc.) */
+
+.md-root-select {
+  margin-left: 8px;
+  padding: 2px 6px;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  max-width: 200px;
+}
+
+.md-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.md-preview-section {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.md-image-wrap {
+  max-width: 100%;
+  max-height: 480px;
+  overflow: hidden;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.md-image {
+  max-width: 100%;
+  max-height: 480px;
+  object-fit: contain;
+  display: block;
+}
+
+.md-file-info {
+  text-align: center;
+  font-size: var(--font-size-sm);
+  color: var(--text-primary);
+  line-height: 1.4;
+}
+
+.md-dirname {
+  display: block;
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+}
+
+.md-prompt-section,
+.md-description-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.md-label {
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.md-textarea {
+  width: 100%;
+  padding: 8px;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  resize: vertical;
+  line-height: 1.5;
+  box-sizing: border-box;
+}
+
+.md-textarea:focus {
+  outline: none;
+  border-color: var(--border-focus);
+}
+
+.md-prompt-textarea {
+  font-family: var(--font-mono, monospace);
+  font-size: var(--font-size-xs);
+}
+
+.md-copy-btn {
+  align-self: flex-start;
+  padding: 4px 12px;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--font-size-sm);
+}
+
+.md-copy-btn:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-focus);
+}
+
+.md-actions {
+  display: flex;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.md-save-btn,
+.md-skip-btn {
+  padding: 6px 16px;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--font-size-sm);
+}
+
+.md-save-btn {
+  background: var(--accent);
+  color: var(--text-on-accent);
+  border-color: var(--accent);
+}
+
+.md-save-btn:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+
+.md-save-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.md-skip-btn {
+  background: var(--bg-input);
+  color: var(--text-primary);
+}
+
+.md-skip-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--border-focus);
+}
+
+.md-skip-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.md-back-btn {
+  margin-top: 16px;
+  padding: 6px 16px;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--font-size-sm);
+}
+
+.md-back-btn:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-focus);
+}
